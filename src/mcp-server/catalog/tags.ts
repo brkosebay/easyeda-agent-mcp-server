@@ -15,7 +15,16 @@ export function inferTags(name: string): string[] {
 	if (/_create_|_modify_|_delete_|_save|_import|_export|_move_|_route_|_repour|_refresh/.test(n)) tags.add('write');
 
 	if (n.includes('_analyze_') || n.includes('_drc') || n.includes('_summarize') || n.includes('_extract')) tags.add('analyze');
-	if (n.includes('_drc')) tags.add('drc');
+	// DRC umbrella: includes rule configs, net classes, differential pairs,
+	// equal-length groups, pad pair groups — all live in pcb-drc-tools.ts.
+	if (
+		n.includes('_drc') ||
+		n.includes('_rule') ||
+		n.includes('_net_class') ||
+		n.includes('_diff_pair') ||
+		n.includes('_equal_length') ||
+		n.includes('_pad_pair')
+	) tags.add('drc');
 	if (n.includes('_pour') || n.includes('_fill')) tags.add('pour');
 	if (n.includes('_via')) tags.add('via');
 	if (n.includes('_track') || n.includes('_route')) tags.add('track');
