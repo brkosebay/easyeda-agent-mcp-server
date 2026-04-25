@@ -28,15 +28,51 @@ export const trackHandlers: Record<string, (params: Record<string, any>) => Prom
 	'pcb.modify.line': async (params) => {
 		const property = { ...params.property };
 		if (property.layer != null) property.layer = normalizeLayer(property.layer);
-		const result = await eda.pcb_PrimitiveLine.modify(params.primitiveId, property);
-		// Always re-fetch and return actual state — modify return value can mask
-		// "succeeded but didn't persist" on properties like lineWidth.
-		const after = await eda.pcb_PrimitiveLine.get(params.primitiveId);
-		const flat = flattenState(after);
-		const persisted = !!flat && Object.entries(property).every(([k, v]) =>
+
+		await eda.pcb_PrimitiveLine.modify(params.primitiveId, property);
+
+		// Always re-fetch and verify — EasyEDA's modify(line, {lineWidth, ...})
+		// silently no-ops on lineWidth changes in some versions.
+		let after = await eda.pcb_PrimitiveLine.get(params.primitiveId);
+		let flat = flattenState(after);
+		let persisted = !!flat && Object.entries(property).every(([k, v]) =>
 			v == null || (flat as any)[k] === v,
 		);
-		return { modified: !!result, persisted, after: flat, attempted: property };
+
+		// Workaround for the lineWidth-no-op bug: if the only un-persisted
+		// property is lineWidth, recreate the line at the new width. The
+		// primitive ID changes — we surface the new ID in `after`.
+		let recreated = false;
+		if (!persisted && property.lineWidth != null && flat) {
+			const before: any = flat;
+			const widthBefore = before.lineWidth;
+			const widthRequested = property.lineWidth;
+			if (widthBefore !== widthRequested) {
+				const layer = property.layer ?? before.layer;
+				const net = property.net ?? before.net;
+				const startX = property.startX ?? before.startX;
+				const startY = property.startY ?? before.startY;
+				const endX = property.endX ?? before.endX;
+				const endY = property.endY ?? before.endY;
+
+				await eda.pcb_PrimitiveLine.delete(params.primitiveId);
+				const fresh = await eda.pcb_PrimitiveLine.create(
+					net, layer, startX, startY, endX, endY, widthRequested,
+				);
+				recreated = true;
+				after = fresh as any;
+				flat = flattenState(fresh);
+				persisted = !!flat && (flat as any).lineWidth === widthRequested;
+			}
+		}
+
+		return {
+			modified: true,
+			persisted,
+			recreated,
+			after: flat,
+			attempted: property,
+		};
 	},
 
 	'pcb.delete.line': async (params) => {
