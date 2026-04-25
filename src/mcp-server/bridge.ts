@@ -58,9 +58,11 @@ export class WebSocketBridge {
 	readonly agentId: string;
 
 	constructor(private readonly port: number = 15168, timeout?: number) {
-		// Default 45s; can be overridden via EDA_WS_TIMEOUT_MS env (whole-number ms).
+		// Default 120s; can be overridden via EDA_WS_TIMEOUT_MS env (whole-number ms).
+		// 120s covers repour-all on dense boards, DSN/SES roundtrips, and big DRC
+		// runs without the agent having to hand-tune _timeoutMs per call.
 		const envTimeout = Number(process.env.EDA_WS_TIMEOUT_MS);
-		this.timeout = timeout ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 45_000);
+		this.timeout = timeout ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 120_000);
 		this.agentId = randomBytes(8).toString('hex');
 	}
 

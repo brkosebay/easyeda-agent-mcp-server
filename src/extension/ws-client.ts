@@ -574,7 +574,9 @@ function stopHeartbeat(): void {
 const LIVE_MODE_KEY = '__claude_mcp_live_mode__';
 const LIVE_TIMER_KEY = '__claude_mcp_live_timer__';
 const LIVE_UUID_KEY = '__claude_mcp_live_uuid__';
-const SCAN_RETRY_INTERVAL_MS = 30_000;
+// 3s when no primary — matches the spawn-and-call cadence of stdio-driven
+// MCP scripts. Once promoted, peer notifications cover discovery.
+const SCAN_RETRY_INTERVAL_MS = 3_000;
 
 function liveTick(extensionUuid: string): void {
 	if (primary.current) return;
@@ -586,6 +588,8 @@ export function startLiveMode(extensionUuid: string): void {
 	if (g2[LIVE_TIMER_KEY]) clearInterval(g2[LIVE_TIMER_KEY]);
 	g2[LIVE_MODE_KEY] = true;
 	g2[LIVE_UUID_KEY] = extensionUuid;
+	// Fire one scan immediately so we don't wait for the first interval tick.
+	liveTick(extensionUuid);
 	g2[LIVE_TIMER_KEY] = setInterval(() => liveTick(extensionUuid), SCAN_RETRY_INTERVAL_MS);
 	startHeartbeat(extensionUuid);
 }
