@@ -9,6 +9,7 @@ import { schWireHandlers } from './handlers/sch-wire';
 import { schDocumentHandlers } from './handlers/sch-document';
 import { schSelectHandlers } from './handlers/sch-select';
 import { schPrimitiveHandlers } from './handlers/sch-primitive';
+import { schExtractHandlers } from './handlers/sch-extract';
 import { libraryHandlers } from './handlers/library';
 import { pourFillHandlers } from './handlers/pour-fill';
 import { manufactureHandlers } from './handlers/manufacture';
@@ -181,6 +182,7 @@ const allHandlers: Record<string, (params: Record<string, any>) => Promise<any>>
 	...schDocumentHandlers,
 	...schSelectHandlers,
 	...schPrimitiveHandlers,
+	...schExtractHandlers,
 	...libraryHandlers,
 	...pourFillHandlers,
 	...manufactureHandlers,

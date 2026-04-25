@@ -12,6 +12,7 @@ import { registerManufactureTools } from './tools/manufacture-tools';
 import { registerPcbDrcTools } from './tools/pcb-drc-tools';
 import { registerPcbLayerTools } from './tools/pcb-layer-tools';
 import { registerEditorTools } from './tools/editor-tools';
+import { registerSchAnalysisTools } from './tools/sch-analysis-tools';
 
 const PORT_RANGE_START = Number(process.env.EDA_WS_PORT) || 15168;
 const PORT_RANGE_SIZE = Number(process.env.EDA_WS_PORT_RANGE) || 40;
@@ -108,6 +109,7 @@ async function main() {
 	registerPcbDrcTools(server, bridge);
 	registerPcbLayerTools(server, bridge);
 	registerEditorTools(server, bridge);
+	registerSchAnalysisTools(server, bridge);
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);

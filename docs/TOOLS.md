@@ -119,6 +119,20 @@ Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA 
 | `pcb_convert_coordinates` | Canvas↔data coordinate conversion. |
 | `pcb_clear_selection` | Deselect all. |
 
+## Schematic analyzers (kicad-happy port — Phase 3)
+
+These tools turn the schematic into actionable findings. `sch_extract_design` produces a normalized snapshot once; every other analyzer accepts that snapshot via the `snapshot` field to avoid re-fetching, or fetches fresh if omitted.
+
+| Tool | What |
+|---|---|
+| `sch_extract_design` | One-shot snapshot: components (designator, MPN, value parsed for R/C/L, footprint, position, deviceClass, pin→net), nets (members + power/ground tagging), pin index, stats by deviceClass. Foundation for the rest. |
+| `sch_analyze_power_tree` | Detects regulators (LDO/buck/boost) by MPN, walks feedback dividers, computes Vout = Vref / (R2/(R1+R2)). Hierarchical — child rails nest under their input rail. |
+| `sch_analyze_decoupling` | Per-rail cap inventory, total capacitance, warnings (no caps on a power rail, fewer caps than IC pins on the rail). |
+| `sch_analyze_passive_networks` | RC filter detection (computes fc), voltage divider (computes ratio + mid net), crystal load caps (computes effective CL). |
+| `sch_analyze_connectors` | Pin count, signal:ground ratio, warnings (no GND pin, ratio >3:1). |
+| `sch_analyze_protection` | Fuses/PTCs (with rail), TVS clamps (with protected net), reverse-polarity diodes. |
+| `sch_analyze_esd_coverage` | Per-connector audit: every signal pin must have a TVS clamp on its net. Flags gaps. |
+
 ## Schematic
 
 | Tool | What |
