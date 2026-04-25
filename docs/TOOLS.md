@@ -6,6 +6,28 @@ This server bridges Claude (or any MCP client) to the EasyEDA Pro extension runn
 Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA extension  ──▶  eda.* APIs
 ```
 
+## Tool surface — dynamic toolsets (default)
+
+The agent sees only **3 meta-tools** in the system prompt:
+
+- `search_tools(query, tags?)` — semantic search across the catalog (local MiniLM embeddings, sub-200 ms cached). Returns ranked tool names + briefs.
+- `describe_tools(names[])` — JSON-schema-style parameter info for the tools you picked. Schemas are 60-80% of static-toolset token cost; lazy-loading them is the biggest saving.
+- `execute_tool(name, args)` — validates args against the tool's Zod shape and runs the underlying handler. Same return shape as the static surface.
+
+The 100+ concrete tools live in a server-side catalog. The first `search_tools` call takes ~2 s while the embedding model loads (Xenova/all-MiniLM-L6-v2, ~22 MB); subsequent calls are sub-200 ms with vectors cached at `.cache/tool-embeddings.json`. Falls back to keyword scoring if the model can't load.
+
+**Opt-out**: set `EDA_DYNAMIC_TOOLSETS=0` to expose every tool individually (the legacy ~108-tool static surface). Useful for older MCP clients that don't handle meta-tool discovery.
+
+### Dynamic-mode workflow
+
+```
+1. search_tools({query: "create a track"}) → ranked tool names + briefs
+2. describe_tools({names: ["pcb_create_track"]}) → JSON-schema parameters
+3. execute_tool({name: "pcb_create_track", args: {...}}) → same shape as static
+```
+
+Optional: `search_tools({tags: ["pcb","write"]})` for tag-only filtering, or pass both `query` and `tags`.
+
 ## Setup
 
 1. Build: `npm run build` — produces `dist/` and a packaged extension archive.

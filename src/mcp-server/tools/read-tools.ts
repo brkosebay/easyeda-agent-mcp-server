@@ -115,7 +115,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 
 	server.tool(
 		'pcb_get_pad',
-		'Look up a single pad by component reference + pad number. Returns {primitiveId, x, y, layer, net}.',
+		'Find the PCB location of a component pin/pad by its designator and pin number — e.g. where pin 3 of R1 sits on the board. Returns {primitiveId, x, y, layer, net}.',
 		withDocumentParam({
 			reference: z.string().describe('Designator (e.g. "R1", "U2")'),
 			padNumber: z.union([z.string(), z.number()]).describe('Pad number/name'),

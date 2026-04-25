@@ -8,3 +8,6 @@ release/
 # Internal worktree metadata + planning scratchpads
 .claude/
 IMPROVEMENT_PLAN.md
+
+# Embeddings cache (generated on first dynamic-toolsets run)
+.cache/
