@@ -189,15 +189,27 @@ These tools turn the schematic into actionable findings. `sch_extract_design` pr
 5. `pcb_drc_summarize` instead of `pcb_run_drc` when you only need the count and top categories.
 6. `pcb_connectivity_status` summarises hundreds of nets in one call.
 
-## Connection model — sticky primary
+## Connection model — multi-connection with per-doc write locks
 
-Once the extension is bonded to an MCP server, it **stays bonded** until you explicitly switch via the EasyEDA menu. This avoids the "keeps reconnecting" churn when multiple Claude / Codex sessions are running and cycling.
+The extension keeps a WebSocket open to **every running MCP server it discovers**, so you can run multiple agents concurrently — e.g. one Claude session doing schematic verification, another doing PCB work.
 
-- **Connect Claude** (menu): if not connected, scan and bond to the first server that answers. If already connected, release the current primary and re-scan — picks up the newest server. This is the only way to switch chats.
-- **Disconnect Claude** (menu): release the primary, no scan.
-- **`newAgent` peer notification** (a fresh MCP server starts in another chat): adds the new server to the standby list **without auto-promoting**. To switch to it, click Connect Claude.
-- **Primary's MCP server shuts down** (terminal closed, process killed): primary is released. Click Connect Claude to bond to whatever else is running.
-- **Heartbeat**: 20 s ping interval, 25 s quiet → ping, 45 s silence → drop. The dropped MCP server's tool calls fail until you reconnect.
+To keep concurrent agents from corrupting each other's state, every tool call that mutates a document is serialized through a **per-document write lock**:
+
+- **Reads** (everything starting with `*_get_*`, `*_run_drc`, `pcb_drc_summarize`, `sch_extract_design`, screenshots, layer/canvas info, library lookups, etc.) dispatch immediately and run concurrently.
+- **Writes** (`*_create_*`, `*_modify_*`, `*_delete_*`, `*_save`, `*_import_*`, autoroute, repour, refresh, layer set/lock, route_orthogonal, anything that mutates state) acquire an async mutex keyed by `document` UUID. Two writes on the same document queue up; two writes on different documents run in parallel.
+
+This means **safe parallelism**: one agent can run `sch_*` writes on a schematic doc while another runs `pcb_*` writes on a PCB doc, with no risk of stepping on each other.
+
+Connection lifecycle:
+
+- **Connect Claude** (menu): scan port range, open a WS to every MCP server that answers `hello`. New servers join the active set.
+- **Disconnect Claude** (menu): close every connection.
+- **`newAgent` peer notification**: a fresh MCP server in another chat dials peers; the extension opens a WS to it automatically.
+- **Server shutdown / silent timeout**: that server's connection is dropped (toast). Other connections are unaffected.
+- **Heartbeat**: 20 s ping interval, 25 s quiet → ping, 45 s silence → drop.
+- **Toasts** are batched — one notification per scan window, not one per port.
+
+Pass `instance_id` to a tool when more than one EasyEDA window is connected. Single-window auto-selects.
 
 ## Environment
 

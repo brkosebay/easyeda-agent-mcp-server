@@ -9,20 +9,18 @@ import { schWireHandlers } from './handlers/sch-wire';
 import { schDocumentHandlers } from './handlers/sch-document';
 import { schSelectHandlers } from './handlers/sch-select';
 import { schPrimitiveHandlers } from './handlers/sch-primitive';
-import { schExtractHandlers } from './handlers/sch-extract';
 import { libraryHandlers } from './handlers/library';
 import { pourFillHandlers } from './handlers/pour-fill';
 import { manufactureHandlers } from './handlers/manufacture';
 import { layerHandlers } from './handlers/layer';
 import { pcbPrimitiveHandlers } from './handlers/pcb-primitive';
 import { editorHandlers } from './handlers/editor';
+import { schExtractHandlers } from './handlers/sch-extract';
 
 const PORT_RANGE_START = 15168;
 const PORT_RANGE_SIZE = 40;
 
 // === Instance ID =========================================================
-// Random 8-char hex stamped on the extension. Survives IIFE re-evaluations
-// (stored on globalThis), unique per browser tab.
 
 const GLOBAL_KEY = '__claude_mcp_instance_id__';
 
@@ -51,9 +49,6 @@ interface QueryParams {
 	compact?: boolean;
 }
 
-// Whitelist when `compact:true` is set explicitly. The default response
-// already omits heavy geometry (see flattenState in _utils.ts); compact
-// goes further to identity + key geometry only.
 const COMPACT_FIELDS = [
 	'primitiveId', 'id', 'net', 'layer',
 	'x', 'y', 'startX', 'startY', 'endX', 'endY',
@@ -111,8 +106,6 @@ function applyQueryParams(result: any, qp: QueryParams): any {
 	if (qp.filter) items = items.filter((i: any) => matchesFilter(i, qp.filter!));
 	if (qp.limit && items.length > qp.limit) items = items.slice(0, qp.limit);
 	if (qp.fields) {
-		// Drop the `_availableFields` envelope — it adds tokens for every call
-		// and the agent can always omit `fields` to discover them.
 		return items.map((i: any) => projectFields(i, qp.fields!));
 	}
 	if (qp.compact) items = items.map(compactItem);
@@ -120,39 +113,25 @@ function applyQueryParams(result: any, qp: QueryParams): any {
 }
 
 // === Connection model ====================================================
-// Single-primary: at most ONE open WebSocket to an MCP server. Other servers
-// discovered via scan or peer notifications go on a standby list (port +
-// agentId + lastSeen). When a `newAgent` event arrives we promote the new
-// port — this matches the user expectation that the freshly started Claude
-// terminal becomes active. If the primary dies, the most-recent standby
-// gets promoted.
+// Multi-connection: the extension keeps a WebSocket open to every running
+// MCP server it discovers. Each server can independently dispatch tool
+// calls; the extension processes them concurrently for reads and serializes
+// writes per-document via the lock manager (see runHandler below).
 
-const PRIMARY_KEY = '__claude_mcp_primary__';
-const STANDBY_KEY = '__claude_mcp_standby__';
+interface ServerEntry {
+	agentId: string;
+	connectedAt: number;
+	greeted: boolean; // true once we've received a `hello`
+}
+
+const SERVERS_KEY = '__claude_mcp_servers__';
 const PROBES_KEY = '__claude_mcp_probes__';
 const LAST_RECV_KEY = '__claude_mcp_last_received__';
 
-interface PrimaryState {
-	port: number;
-	agentId: string;
-}
-
-interface StandbyEntry {
-	agentId: string;
-	lastSeen: number;
-}
-
 const g = globalThis as any;
-const primary: { current: PrimaryState | null } =
-	g[PRIMARY_KEY] || (g[PRIMARY_KEY] = { current: null });
-const standby: Map<number, StandbyEntry> =
-	g[STANDBY_KEY] || (g[STANDBY_KEY] = new Map<number, StandbyEntry>());
-// Open WS that haven't yet greeted us with `hello`. Either they'll greet
-// (and become primary or be moved to standby), or they'll be reaped by the
-// 4s probe timeout.
-const probes: Map<number, number> = g[PROBES_KEY] || (g[PROBES_KEY] = new Map<number, number>());
-const lastReceivedTime: Map<number, number> =
-	g[LAST_RECV_KEY] || (g[LAST_RECV_KEY] = new Map<number, number>());
+const servers: Map<number, ServerEntry> = g[SERVERS_KEY] || (g[SERVERS_KEY] = new Map<number, ServerEntry>());
+const probes: Map<number, any> = g[PROBES_KEY] || (g[PROBES_KEY] = new Map<number, any>());
+const lastReceivedTime: Map<number, number> = g[LAST_RECV_KEY] || (g[LAST_RECV_KEY] = new Map<number, number>());
 
 const PROBE_TIMEOUT_MS = 4_000;
 
@@ -164,8 +143,84 @@ function wsUrlForPort(port: number): string {
 	return `ws://localhost:${port}?instanceId=${instanceId}`;
 }
 
-function isPrimary(port: number): boolean {
-	return primary.current?.port === port;
+// === Lock manager (per-document write serialization) =====================
+// Reads dispatch immediately. Writes acquire an async mutex keyed by the
+// document UUID (or a global key when no doc context). This lets two agents
+// work in parallel — one on a schematic and one on a PCB, or two reads
+// against the same doc — while preventing simultaneous writes from
+// trampling each other (e.g. two tools both creating tracks on the same PCB).
+
+const docLocks: Map<string, Promise<void>> = new Map();
+
+async function withDocLock<T>(docKey: string, fn: () => Promise<T>): Promise<T> {
+	const prev = docLocks.get(docKey) ?? Promise.resolve();
+	let release!: () => void;
+	const gate = new Promise<void>((r) => { release = r; });
+	docLocks.set(docKey, prev.then(() => gate));
+	try {
+		await prev;
+		return await fn();
+	} finally {
+		release();
+		if (docLocks.get(docKey) === prev.then(() => gate)) docLocks.delete(docKey);
+	}
+}
+
+// Methods that don't mutate the document. Any method NOT in this set is
+// treated as a write and goes through the lock.
+const READ_METHODS = new Set<string>([
+	'instance.getInfo',
+	// PCB reads
+	'pcb.getAll.component', 'pcb.get.component', 'pcb.component.getPins',
+	'pcb.getAll.line', 'pcb.get.line',
+	'pcb.getAll.polyline', 'pcb.get.polyline',
+	'pcb.getAll.via', 'pcb.get.via',
+	'pcb.getAll.pad', 'pcb.get.pad', 'pcb.pad.findByRef',
+	'pcb.getAll.pour', 'pcb.get.pour',
+	'pcb.getAll.fill', 'pcb.get.fill',
+	'pcb.getAll.arc', 'pcb.get.arc',
+	'pcb.getAll.region', 'pcb.get.region',
+	'pcb.net.getAllNames', 'pcb.net.getPrimitives', 'pcb.net.getLength',
+	'pcb.net.connectivityStatus',
+	'pcb.drc.check', 'pcb.drc.summarize',
+	'pcb.drc.getCurrentRuleConfigName', 'pcb.drc.getRuleConfiguration',
+	'pcb.drc.getRuleConfigByName', 'pcb.drc.getAllRuleConfigs',
+	'pcb.drc.getDefaultRuleConfigName', 'pcb.drc.getNetRules',
+	'pcb.drc.getNetByNetRules', 'pcb.drc.getRegionRules',
+	'pcb.drc.getAllNetClasses', 'pcb.drc.getDiffPairs',
+	'pcb.drc.getEqualLengthGroups',
+	'pcb.layer.getAll', 'pcb.layer.getStatus',
+	'pcb.document.navigateToCoordinates', 'pcb.document.navigateToRegion',
+	'pcb.document.getPrimitiveAtPoint', 'pcb.document.getPrimitivesInRegion',
+	'pcb.document.zoomToBoardOutline', 'pcb.document.getCanvasOrigin',
+	'pcb.document.convertCanvasToData', 'pcb.document.convertDataToCanvas',
+	'pcb.document.getCanvasFilter',
+	'pcb.select.getAll',
+	// SCH reads
+	'sch.connectivity.get', 'sch.netlist.get', 'sch.drc.check',
+	'sch.component.get', 'sch.component.getAll', 'sch.component.getAllPins',
+	'sch.wire.get', 'sch.wire.getAll',
+	'sch.primitive.get', 'sch.primitive.getType', 'sch.primitive.getBBox',
+	'sch.select.getAll', 'sch.select.getAllIds',
+	'sch.extract.design',
+	// Editor / project reads + screenshots
+	'editor.project.getStructure', 'editor.getCurrentDocument', 'editor.getOpenTabs',
+	'editor.screenshot', 'pcb.screenshot.board',
+	// Library reads (most lib operations are search/lookup)
+	'lib.getAll', 'lib.search', 'lib.get', 'lib.getByLcsc', 'lib.getSystemUuid',
+]);
+
+function isReadMethod(method: string): boolean {
+	if (READ_METHODS.has(method)) return true;
+	// Permissive heuristic: lib.* defaults to read. Anything else is a write.
+	if (method.startsWith('lib.')) return true;
+	return false;
+}
+
+function lockKey(docUuid: string | undefined, method: string): string {
+	if (docUuid) return `doc:${docUuid}`;
+	// Global lock for methods that affect all docs / app-level state.
+	return `__global__`;
 }
 
 // === Handler dispatch ====================================================
@@ -182,13 +237,13 @@ const allHandlers: Record<string, (params: Record<string, any>) => Promise<any>>
 	...schDocumentHandlers,
 	...schSelectHandlers,
 	...schPrimitiveHandlers,
-	...schExtractHandlers,
 	...libraryHandlers,
 	...pourFillHandlers,
 	...manufactureHandlers,
 	...layerHandlers,
 	...pcbPrimitiveHandlers,
 	...editorHandlers,
+	...schExtractHandlers,
 };
 
 async function getInstanceInfo(): Promise<Record<string, any>> {
@@ -218,6 +273,7 @@ async function getInstanceInfo(): Promise<Record<string, any>> {
 			currentDocument: doc?.tabId,
 			documentType: doc?.documentType != null ? (DOC_TYPE_NAMES[doc.documentType] || `type_${doc.documentType}`) : undefined,
 			documents,
+			connectedServers: servers.size,
 		};
 	} catch {
 		return { instanceId };
@@ -266,10 +322,9 @@ function handleMessage(extensionUuid: string, port: number, event: MessageEvent<
 		}
 
 		if (request.type === 'newAgent') {
-			// Peer notification: a brand-new MCP server just started. Promote it.
 			const newPort = request.port as number;
-			if (newPort && newPort !== port) {
-				promoteOrConnect(extensionUuid, newPort, request.agentId || '');
+			if (newPort && newPort !== port && !servers.has(newPort) && !probes.has(newPort)) {
+				openWs(extensionUuid, newPort);
 			}
 			return;
 		}
@@ -279,10 +334,7 @@ function handleMessage(extensionUuid: string, port: number, event: MessageEvent<
 			return;
 		}
 
-		// Only the primary processes RPC requests. Other ports shouldn't be
-		// sending RPC at all (we close them after hello), but guard anyway.
-		if (!isPrimary(port)) return;
-
+		// RPC request from a connected MCP server.
 		id = request.id;
 		const method: string = request.method;
 		const params: Record<string, any> = request.params || {};
@@ -299,15 +351,20 @@ function handleMessage(extensionUuid: string, port: number, event: MessageEvent<
 		const docUuid = document ? String(document).split('@')[0] : undefined;
 		const switchDoc = docUuid ? eda.dmt_EditorControl.openDocument(docUuid) : Promise.resolve();
 
-		switchDoc.then(
-			() => requireDocumentType(method).then(
-				() => handler(handlerParams).then(
-					(result) => sendResponse(extensionUuid, port, id!, applyQueryParams(result, qp)),
-					(err: any) => sendResponse(extensionUuid, port, id!, undefined, err instanceof Error ? err.message : String(err)),
-				),
-				(err: any) => sendResponse(extensionUuid, port, id!, undefined, err instanceof Error ? err.message : String(err)),
-			),
-			(err: any) => sendResponse(extensionUuid, port, id!, undefined, `Failed to switch to document "${docUuid}": ${err instanceof Error ? err.message : String(err)}`),
+		const dispatch = async () => {
+			await switchDoc;
+			await requireDocumentType(method);
+			const result = await handler(handlerParams);
+			return applyQueryParams(result, qp);
+		};
+
+		const work = isReadMethod(method)
+			? dispatch()
+			: withDocLock(lockKey(docUuid, method), dispatch);
+
+		work.then(
+			(result) => sendResponse(extensionUuid, port, id!, result),
+			(err: any) => sendResponse(extensionUuid, port, id!, undefined, err instanceof Error ? err.message : String(err)),
 		);
 	} catch (err: any) {
 		const errorMsg = err instanceof Error ? err.message : String(err);
@@ -333,132 +390,92 @@ function sendNotification(extensionUuid: string, port: number, type: string, dat
 	}
 }
 
-async function pushPrimaryInstanceInfo(extensionUuid: string): Promise<void> {
-	if (!primary.current) return;
+async function pushInstanceInfoToAll(extensionUuid: string): Promise<void> {
+	if (servers.size === 0) return;
 	const info = await getInstanceInfo();
-	sendNotification(extensionUuid, primary.current.port, 'instanceInfo', info);
+	for (const port of servers.keys()) {
+		sendNotification(extensionUuid, port, 'instanceInfo', info);
+	}
 }
 
-// === Promotion / standby ================================================
+// === Connection lifecycle ================================================
 
 function handleHello(extensionUuid: string, port: number, agentId: string): void {
-	// Probe completed — server greeted us.
 	const probeTimer = probes.get(port);
 	if (probeTimer != null) {
 		clearTimeout(probeTimer);
 		probes.delete(port);
 	}
 
-	standby.set(port, { agentId, lastSeen: Date.now() });
-
-	if (primary.current == null) {
-		setPrimary(extensionUuid, port, agentId);
-	} else if (primary.current.port === port) {
-		// Already primary — refresh agentId
-		primary.current.agentId = agentId;
-	} else {
-		// Already have a primary; this one stays in standby silently.
-		// Close its WS to keep extension's open-socket count at exactly 1.
-		closeWs(extensionUuid, port);
+	const existing = servers.get(port);
+	if (existing) {
+		existing.agentId = agentId;
+		existing.greeted = true;
+		return;
 	}
+
+	servers.set(port, { agentId, connectedAt: Date.now(), greeted: true });
+	queueConnectionToast(port);
+	setTimeout(() => pushInstanceInfoToAll(extensionUuid), 200);
 }
 
 function handleShutdown(extensionUuid: string, port: number): void {
-	standby.delete(port);
-	closeWs(extensionUuid, port);
-
-	if (primary.current?.port === port) {
-		primary.current = null;
-		showInfo(`Claude MCP Server on port ${port} shut down — click Connect Claude to attach to another session`);
-		// Sticky model: do NOT auto-promote a standby. Switching primaries
-		// without an explicit user action causes "keeps reconnecting" churn
-		// when multiple Claude sessions cycle. The user reconnects via the
-		// Claude → Connect Claude menu when ready.
+	if (servers.has(port)) {
+		servers.delete(port);
+		showInfo(`Claude MCP Server on port ${port} shut down`);
 	}
+	closeWs(extensionUuid, port);
 }
 
 function dropConnection(extensionUuid: string, port: number): void {
-	standby.delete(port);
+	const had = servers.delete(port);
 	probes.delete(port);
 	lastReceivedTime.delete(port);
-
-	if (primary.current?.port === port) {
-		primary.current = null;
-		// Same sticky semantics as handleShutdown — no auto-promote.
-	}
-
+	if (had) showWarning(`Lost connection to Claude MCP Server on port ${port}`);
 	try {
 		eda.sys_WebSocket.close(wsIdForPort(port), undefined, undefined, extensionUuid);
 	} catch {/* already closed */}
 }
 
-function setPrimary(extensionUuid: string, port: number, agentId: string): void {
-	const previous = primary.current;
-	primary.current = { port, agentId };
+// Toast batcher — multiple ports connecting in the same scan window
+// produce ONE toast.
+let pendingConnectPorts: number[] = [];
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-	if (previous && previous.port !== port) {
-		standby.set(previous.port, { agentId: previous.agentId, lastSeen: Date.now() });
-		closeWs(extensionUuid, previous.port);
-	}
-
-	showSuccess(`Connected to Claude MCP Server on port ${port}`);
-	setTimeout(() => pushPrimaryInstanceInfo(extensionUuid), 200);
-}
-
-function promoteOrConnect(extensionUuid: string, port: number, agentId: string): void {
-	standby.set(port, { agentId, lastSeen: Date.now() });
-
-	// Already primary? Nothing to do.
-	if (primary.current?.port === port) return;
-
-	// Open a WS and let `hello` decide.
-	openWs(extensionUuid, port, /* preferPrimary */ true);
-}
-
-// Used only by the explicit Connect Claude flow now — the lifecycle paths
-// no longer auto-promote on primary loss (sticky model).
-function promoteFromStandby(extensionUuid: string): void {
-	if (primary.current != null) return;
-
-	const candidates = Array.from(standby.entries())
-		.sort((a, b) => b[1].lastSeen - a[1].lastSeen);
-	for (const [port] of candidates) {
-		openWs(extensionUuid, port, true);
-		return;
-	}
-
-	scanForServers(extensionUuid);
+function queueConnectionToast(port: number): void {
+	pendingConnectPorts.push(port);
+	if (toastTimer) clearTimeout(toastTimer);
+	toastTimer = setTimeout(() => {
+		const ports = pendingConnectPorts;
+		pendingConnectPorts = [];
+		toastTimer = null;
+		if (ports.length === 1) {
+			showSuccess(`Connected to Claude MCP Server on port ${ports[0]}`);
+		} else if (ports.length > 1) {
+			showSuccess(`Connected to ${ports.length} Claude MCP Servers (ports ${ports.join(', ')})`);
+		}
+	}, 600);
 }
 
 // === WS open / close primitives =========================================
 
-function openWs(extensionUuid: string, port: number, preferPrimary: boolean): void {
-	if (probes.has(port)) return;
-	if (primary.current?.port === port) return;
+function openWs(extensionUuid: string, port: number): void {
+	if (probes.has(port) || servers.has(port)) return;
 
 	const wsId = wsIdForPort(port);
 	const wsUrl = wsUrlForPort(port);
 
-	// Probe timeout: if `hello` doesn't arrive within PROBE_TIMEOUT_MS, give up.
 	const timer = setTimeout(() => {
 		probes.delete(port);
-		// Quietly close the failed probe — most likely no server on this port.
-		try {
-			eda.sys_WebSocket.close(wsId, undefined, undefined, extensionUuid);
-		} catch {/* never opened */}
+		try { eda.sys_WebSocket.close(wsId, undefined, undefined, extensionUuid); } catch {/* */}
 	}, PROBE_TIMEOUT_MS);
-	probes.set(port, timer as unknown as number);
+	probes.set(port, timer);
 
 	eda.sys_WebSocket.register(
 		wsId,
 		wsUrl,
 		(event: MessageEvent<any>) => handleMessage(extensionUuid, port, event),
-		() => {
-			lastReceivedTime.set(port, Date.now());
-			// If preferPrimary and we currently have no primary, eagerly switch
-			// the moment hello arrives (handled by handleHello).
-			void preferPrimary;
-		},
+		() => { lastReceivedTime.set(port, Date.now()); },
 	);
 }
 
@@ -476,65 +493,46 @@ function closeWs(extensionUuid: string, port: number): void {
 
 // === Scanning ============================================================
 
-let scanInFlight = false;
-let scanCompletionTimer: ReturnType<typeof setTimeout> | null = null;
-
 function scanForServers(extensionUuid: string): void {
-	if (scanInFlight) return;
-	scanInFlight = true;
-
 	for (let i = 0; i < PORT_RANGE_SIZE; i++) {
-		openWs(extensionUuid, PORT_RANGE_START + i, /* preferPrimary */ true);
-	}
-
-	if (scanCompletionTimer) clearTimeout(scanCompletionTimer);
-	scanCompletionTimer = setTimeout(() => {
-		scanInFlight = false;
-		scanCompletionTimer = null;
-		if (!primary.current && standby.size === 0) {
-			showInfo('No Claude MCP Server found in port range 15168–15207');
+		const port = PORT_RANGE_START + i;
+		if (!servers.has(port) && !probes.has(port)) {
+			openWs(extensionUuid, port);
 		}
-	}, PROBE_TIMEOUT_MS + 500);
+	}
 }
 
-// Connect Claude (menu button or auto-connect): explicit user intent.
-// If already connected, demote the current primary and re-scan to pick the
-// newest hello — lets users switch chats without first hitting Disconnect.
-// If not connected, just scan.
 export function connectToMcpServers(extensionUuid: string): void {
-	if (primary.current) {
-		const oldPort = primary.current.port;
-		showInfo(`Reconnecting — releasing port ${oldPort} and re-scanning`);
-		primary.current = null;
-		closeWs(extensionUuid, oldPort);
-		standby.delete(oldPort);
-	}
+	const before = servers.size;
 	scanForServers(extensionUuid);
+	if (before > 0) {
+		// User explicitly clicked Connect Claude with existing connections —
+		// signal to them.
+		setTimeout(() => {
+			if (servers.size === before) {
+				showInfo(`No new servers found (${before} already connected)`);
+			}
+		}, PROBE_TIMEOUT_MS + 500);
+	}
 }
 
 export function disconnectFromAllMcpServers(extensionUuid: string): void {
-	if (primary.current) {
-		closeWs(extensionUuid, primary.current.port);
-	}
-	for (const port of standby.keys()) closeWs(extensionUuid, port);
+	for (const port of servers.keys()) closeWs(extensionUuid, port);
 	for (const port of probes.keys()) closeWs(extensionUuid, port);
-	primary.current = null;
-	standby.clear();
+	servers.clear();
 	probes.clear();
 	lastReceivedTime.clear();
 }
 
 export function getConnectedPortCount(): number {
-	return primary.current ? 1 : 0;
+	return servers.size;
 }
 
 export function getConnectedPorts(): number[] {
-	return primary.current ? [primary.current.port] : [];
+	return Array.from(servers.keys());
 }
 
 // === Heartbeat ===========================================================
-// Tighter than the old 90/60/180s cadence so dead connections vanish in
-// under a minute. We only watch the primary; standby ports have no open WS.
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const QUIET_THRESHOLD_MS = 25_000;
@@ -542,23 +540,20 @@ const DEAD_THRESHOLD_MS = 45_000;
 const HEARTBEAT_TIMER_KEY = '__claude_mcp_heartbeat_timer__';
 
 function runHeartbeat(extensionUuid: string): void {
-	if (!primary.current) return;
-	const port = primary.current.port;
+	if (servers.size === 0) return;
 	const now = Date.now();
-	const lastRecv = lastReceivedTime.get(port) ?? 0;
-	const silenceMs = now - lastRecv;
+	for (const port of [...servers.keys()]) {
+		const lastRecv = lastReceivedTime.get(port) ?? 0;
+		const silenceMs = now - lastRecv;
 
-	if (silenceMs >= DEAD_THRESHOLD_MS) {
-		showWarning(`Lost connection to Claude MCP Server on port ${port}`);
-		dropConnection(extensionUuid, port);
-		return;
-	}
-
-	if (silenceMs >= QUIET_THRESHOLD_MS) {
-		try {
-			eda.sys_WebSocket.send(wsIdForPort(port), JSON.stringify({ type: 'ping' }), extensionUuid);
-		} catch {
+		if (silenceMs >= DEAD_THRESHOLD_MS) {
 			dropConnection(extensionUuid, port);
+		} else if (silenceMs >= QUIET_THRESHOLD_MS) {
+			try {
+				eda.sys_WebSocket.send(wsIdForPort(port), JSON.stringify({ type: 'ping' }), extensionUuid);
+			} catch {
+				dropConnection(extensionUuid, port);
+			}
 		}
 	}
 }
@@ -578,19 +573,17 @@ function stopHeartbeat(): void {
 }
 
 // === Live mode ===========================================================
-// Background discovery only kicks in when we have NO primary. Once we own
-// a primary, peer notifications (`newAgent`) handle discovery for free —
-// no rescans needed.
 
 const LIVE_MODE_KEY = '__claude_mcp_live_mode__';
 const LIVE_TIMER_KEY = '__claude_mcp_live_timer__';
 const LIVE_UUID_KEY = '__claude_mcp_live_uuid__';
-// 3s when no primary — matches the spawn-and-call cadence of stdio-driven
-// MCP scripts. Once promoted, peer notifications cover discovery.
-const SCAN_RETRY_INTERVAL_MS = 3_000;
+// Adaptive: 3s while we have any active connection (cheap discovery for new
+// servers), 5s when empty (still snappy for spawn-and-call scripts). The
+// scan checks every port but skips already-connected ones.
+const SCAN_INTERVAL_ACTIVE_MS = 3_000;
+const SCAN_INTERVAL_EMPTY_MS = 5_000;
 
 function liveTick(extensionUuid: string): void {
-	if (primary.current) return;
 	scanForServers(extensionUuid);
 }
 
@@ -599,9 +592,9 @@ export function startLiveMode(extensionUuid: string): void {
 	if (g2[LIVE_TIMER_KEY]) clearInterval(g2[LIVE_TIMER_KEY]);
 	g2[LIVE_MODE_KEY] = true;
 	g2[LIVE_UUID_KEY] = extensionUuid;
-	// Fire one scan immediately so we don't wait for the first interval tick.
 	liveTick(extensionUuid);
-	g2[LIVE_TIMER_KEY] = setInterval(() => liveTick(extensionUuid), SCAN_RETRY_INTERVAL_MS);
+	const interval = servers.size > 0 ? SCAN_INTERVAL_ACTIVE_MS : SCAN_INTERVAL_EMPTY_MS;
+	g2[LIVE_TIMER_KEY] = setInterval(() => liveTick(extensionUuid), interval);
 	startHeartbeat(extensionUuid);
 }
 
