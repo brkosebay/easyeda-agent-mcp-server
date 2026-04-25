@@ -15,18 +15,17 @@ export const drcHandlers: Record<string, (params: Record<string, any>) => Promis
 
 		const top = Number(params?.top) > 0 ? Number(params.top) : 25;
 		const groupBy: 'category' | 'net' | 'component' = params?.groupBy || 'category';
+		const includeSamples = params?.includeSamples !== false;
 
-		type Counter = Map<string, { count: number; sample: any; ids: string[] }>;
+		type Counter = Map<string, { count: number; samples: any[]; offenderIds: Set<string> }>;
 		const counters: Counter = new Map();
 
 		for (const v of violations) {
 			const key = pickGroupKey(v, groupBy);
-			const entry = counters.get(key) || { count: 0, sample: v, ids: [] };
+			const entry = counters.get(key) || { count: 0, samples: [], offenderIds: new Set() };
 			entry.count += 1;
-			if (entry.ids.length < 5) {
-				const id = v?.primitiveId || v?.id || v?.itemId;
-				if (id) entry.ids.push(String(id));
-			}
+			if (entry.samples.length < 3) entry.samples.push(extractOffender(v));
+			for (const id of collectIds(v)) entry.offenderIds.add(id);
 			counters.set(key, entry);
 		}
 
@@ -34,8 +33,8 @@ export const drcHandlers: Record<string, (params: Record<string, any>) => Promis
 			.map(([key, data]) => ({
 				key,
 				count: data.count,
-				sampleMessage: data.sample?.message || data.sample?.errorMessage || data.sample?.description,
-				samplePrimitiveIds: data.ids,
+				offenderIds: Array.from(data.offenderIds).slice(0, 20),
+				samples: includeSamples ? data.samples : undefined,
 			}))
 			.sort((a, b) => b.count - a.count)
 			.slice(0, top);
@@ -221,4 +220,58 @@ function pickGroupKey(v: any, groupBy: 'category' | 'net' | 'component'): string
 				v.category || v.ruleType || v.rule || v.errorType || v.type || 'unknown',
 			);
 	}
+}
+
+// Recursively collect anything that looks like a primitive ID — EasyEDA's DRC
+// payload puts them in different fields per violation type (primitiveId,
+// primitiveIds, objIds, itemId, refIds, etc.). We pick up GUID-ish strings
+// and string arrays under any field name.
+function collectIds(v: any): string[] {
+	const ids = new Set<string>();
+	if (!v || typeof v !== 'object') return [];
+
+	const isIdLike = (s: any): boolean =>
+		typeof s === 'string' && s.length >= 6 && /^[A-Za-z0-9_-]+$/.test(s) &&
+		// Heuristic: contains at least one digit or non-trivial pattern.
+		(/\d/.test(s) || s.length >= 16);
+
+	const walk = (node: any, depth: number): void => {
+		if (!node || depth > 3) return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		if (typeof node !== 'object') return;
+		for (const [key, value] of Object.entries(node)) {
+			if (typeof value === 'string' && /id/i.test(key) && isIdLike(value)) ids.add(value);
+			else if (Array.isArray(value) && /id/i.test(key)) {
+				for (const item of value) if (isIdLike(item)) ids.add(item as string);
+			} else if (typeof value === 'object') {
+				walk(value, depth + 1);
+			}
+		}
+	};
+	walk(v, 0);
+	return Array.from(ids);
+}
+
+// Compact, structured offender info for inclusion in DRC summary samples.
+// Keeps anything that looks useful for repair (offending IDs, coordinates,
+// measured values) and drops huge nested payloads.
+function extractOffender(v: any): any {
+	if (!v || typeof v !== 'object') return v;
+	const out: Record<string, any> = {};
+	const keep = [
+		'errorType', 'errorObjType', 'category', 'ruleType', 'rule',
+		'message', 'errorMessage', 'description',
+		'net', 'netName', 'net1', 'net2',
+		'component', 'designator', 'refDes',
+		'value', 'measured', 'minClearance', 'minimum', 'expected',
+		'x', 'y', 'left', 'right', 'top', 'bottom',
+		'layer',
+	];
+	for (const k of keep) if (k in v) out[k] = (v as any)[k];
+	const ids = collectIds(v);
+	if (ids.length > 0) out.offenderIds = ids;
+	return out;
 }

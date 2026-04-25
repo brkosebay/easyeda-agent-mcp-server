@@ -47,6 +47,54 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 	);
 
 	server.tool(
+		'wait_for_extension',
+		'Block until the EasyEDA extension is connected to this MCP server. Use at the start of ad-hoc scripts before calling pcb_*/sch_* tools — avoids the "not connected" race when the agent fires before the extension attaches.',
+		withInstanceParam({
+			timeoutMs: z.number().int().positive().optional().default(15000).describe('Max wait (ms)'),
+		}),
+		async ({ timeoutMs }) => {
+			const deadline = Date.now() + (timeoutMs ?? 15000);
+			while (Date.now() < deadline) {
+				if (bridge.isConnected()) {
+					const instances = bridge.getConnectedInstances();
+					return { content: [{ type: 'text', text: JSON.stringify({ ready: true, instances }, null, 2) }] };
+				}
+				await new Promise((r) => setTimeout(r, 250));
+			}
+			return {
+				content: [{ type: 'text', text: JSON.stringify({ ready: false, hint: 'Extension did not attach in time. Click Connect Claude in EasyEDA, or check that the extension is loaded.' }, null, 2) }],
+				isError: true,
+			};
+		},
+	);
+
+	server.tool(
+		'pcb_screenshot_board',
+		'Refresh ratlines, zoom-fit the board outline, and capture a PNG — one call instead of three. Inline image content. Desktop Electron only.',
+		withInstanceParam({
+			tabId: z.string().optional(),
+		}),
+		async (params) => {
+			try {
+				const result = (await bridge.send('pcb.screenshot.board', params)) as {
+					mimeType: string; size: number; base64: string;
+				};
+				return {
+					content: [
+						{ type: 'image', data: result.base64, mimeType: result.mimeType },
+						{ type: 'text', text: `Captured ${result.size} bytes (${result.mimeType}).` },
+					],
+				};
+			} catch (err: any) {
+				return {
+					content: [{ type: 'text', text: `Screenshot failed: ${err?.message ?? err}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	server.tool(
 		'editor_screenshot',
 		'Capture the current canvas as a PNG. Returns inline image content. NOTE: EasyEDA Pro web app currently returns undefined for this API; works on desktop Electron. Falls back to a structured error.',
 		withInstanceParam({

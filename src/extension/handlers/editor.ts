@@ -96,6 +96,23 @@ export const editorHandlers: Record<string, (params: Record<string, any>) => Pro
 		};
 	},
 
+	// One-shot "show me the board": refresh ratlines + zoom-fit + capture.
+	// Avoids three round-trips when an agent just wants a clean PCB image.
+	'pcb.screenshot.board': async (params) => {
+		await eda.pcb_Document.stopCalculatingRatline().catch(() => {});
+		await eda.pcb_Document.startCalculatingRatline().catch(() => {});
+		await eda.pcb_Document.zoomToBoardOutline().catch(() => {});
+		const blob = await eda.dmt_EditorControl.getCurrentRenderedAreaImage(params?.tabId);
+		if (!blob) {
+			throw new Error(
+				'Screenshot returned undefined. EasyEDA Pro web app does not currently expose canvas screenshots; ' +
+				'this typically works only on the desktop Electron build.',
+			);
+		}
+		const base64 = await blobToBase64(blob);
+		return { mimeType: blob.type || 'image/png', size: blob.size, base64 };
+	},
+
 	// Canvas viewport control — pan/zoom that the agent can trigger.
 	'editor.zoomToRegion': async (params) => {
 		return eda.dmt_EditorControl.zoomToRegion(params.left, params.right, params.top, params.bottom, params.tabId);

@@ -56,13 +56,33 @@ const PAD_PAIR_HANDLERS: Record<string, string> = {
 export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge): void {
 	server.tool(
 		'pcb_drc_summarize',
-		'Run DRC and return the top-N violation groups instead of every error. Group by category (default), net, or component. Each group includes count, a sample error message, and up to 5 sample primitive IDs to drill into. Use this before pcb_run_drc when you only need an overview.',
+		'Run DRC and return the top-N violation groups. Each group includes count, up to 20 offender primitive IDs, and up to 3 sample violation objects with coordinates / measured values when EasyEDA exposes them. Use this before pcb_run_drc when you only need an overview.',
 		withDocumentParam({
 			groupBy: z.enum(['category', 'net', 'component']).optional().default('category').describe('Group axis'),
 			top: z.number().int().positive().optional().default(25).describe('Max groups returned'),
+			includeSamples: z.boolean().optional().default(true).describe('Include 3 sample violations per group with coords/IDs (default true)'),
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.summarize', params);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_create_board_pour',
+		'Create a copper pour bounded by the board outline minus an inset. Computes bbox from layer-11 (BoardOutline) Line+Arc primitives. For non-rectangular boards, fall back to pcb_create_pour with an explicit polygon.',
+		withDocumentParam({
+			net: z.string().describe('Net name (typically GND or a power rail)'),
+			layer: z.union([z.string(), z.number()]).describe('Copper layer (Top/Bottom/Inner1..30)'),
+			inset_mil: z.number().optional().default(20).describe('Margin from board edge (mil); default 20'),
+			pourFillMethod: z.enum(['solid', '45grid', '90grid']).optional(),
+			pourName: z.string().optional(),
+			pourPriority: z.number().optional(),
+			lineWidth: z.number().optional(),
+			preserveSilos: z.boolean().optional(),
+		}),
+		async (params) => {
+			const result = await bridge.send('pcb.create.boardPour', params);
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);

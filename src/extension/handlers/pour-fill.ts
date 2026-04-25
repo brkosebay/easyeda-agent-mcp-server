@@ -88,6 +88,73 @@ export const pourFillHandlers: Record<string, (params: Record<string, any>) => P
 		return eda.pcb_PrimitiveFill.delete(params.ids);
 	},
 
+	// Create a copper pour bounded by the board outline (with optional inset).
+	// Computes the bounding box of layer 11 (BoardOutline) Line+Arc primitives
+	// and uses it as a rectangle source. Works for rectangular boards; for
+	// complex shapes pass an explicit polygon to pcb_create_pour instead.
+	'pcb.create.boardPour': async (params) => {
+		const insetMil = Number(params?.inset_mil ?? 20);
+		const layer = normalizeLayer(params.layer);
+		const net: string = params.net;
+
+		const lines = await eda.pcb_PrimitiveLine.getAll(undefined, 11 as any, undefined);
+		const arcs = await eda.pcb_PrimitiveArc.getAll(undefined, 11 as any, undefined);
+
+		const xs: number[] = [];
+		const ys: number[] = [];
+		for (const l of lines || []) {
+			const li: any = l;
+			xs.push(li.getState_StartX?.() ?? 0, li.getState_EndX?.() ?? 0);
+			ys.push(li.getState_StartY?.() ?? 0, li.getState_EndY?.() ?? 0);
+		}
+		for (const a of arcs || []) {
+			const ai: any = a;
+			xs.push(ai.getState_StartX?.() ?? 0, ai.getState_EndX?.() ?? 0);
+			ys.push(ai.getState_StartY?.() ?? 0, ai.getState_EndY?.() ?? 0);
+		}
+
+		if (xs.length === 0) {
+			throw new Error('No primitives on the BoardOutline layer (id 11). Draw the outline first or pass an explicit polygon to pcb_create_pour.');
+		}
+
+		const minX = Math.min(...xs) + insetMil;
+		const maxX = Math.max(...xs) - insetMil;
+		const minY = Math.min(...ys) + insetMil;
+		const maxY = Math.max(...ys) - insetMil;
+
+		if (maxX <= minX || maxY <= minY) {
+			throw new Error(`Inset ${insetMil} mil is larger than the board — pick a smaller value.`);
+		}
+
+		const polygonSource: any = ['L',
+			minX, minY,
+			maxX, minY,
+			maxX, maxY,
+			minX, maxY,
+			minX, minY,
+		];
+		const polygon = eda.pcb_MathPolygon.createPolygon(polygonSource);
+		if (!polygon) throw new Error('Failed to build polygon from board outline bbox.');
+
+		const result = await eda.pcb_PrimitivePour.create(
+			net,
+			layer,
+			polygon,
+			params.pourFillMethod,
+			params.preserveSilos,
+			params.pourName ?? `${net}_${typeof params.layer === 'string' ? params.layer : layer}`,
+			params.pourPriority,
+			params.lineWidth,
+			params.primitiveLock,
+		);
+		return {
+			...flattenState(result),
+			boardBBox: { minX: minX - insetMil, maxX: maxX + insetMil, minY: minY - insetMil, maxY: maxY + insetMil },
+			pourBBox: { minX, maxX, minY, maxY },
+			inset_mil: insetMil,
+		};
+	},
+
 	'pcb.pour.repourAll': async (params) => {
 		const layer = params?.layer != null ? normalizeLayer(params.layer) : undefined;
 		const pours = await eda.pcb_PrimitivePour.getAll(params?.net, layer, undefined);

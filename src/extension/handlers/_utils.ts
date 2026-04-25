@@ -127,12 +127,20 @@ export function normalizePolygon(input: PolygonInput): Array<string | number> {
 		return input as Array<string | number>;
 	}
 
-	// Numeric flat array — assume L mode pairs, prepend "L"
+	// Numeric flat array — assume L mode pairs, prepend "L" + auto-close
 	if (input.length > 0 && typeof input[0] === 'number') {
 		if (input.length % 2 !== 0) {
 			throw new Error('Numeric polygon array must have an even number of values (x,y pairs).');
 		}
-		return ['L', ...(input as number[])];
+		const nums = input as number[];
+		const out: Array<string | number> = ['L', ...nums];
+		// Auto-close the ring if the last point doesn't match the first.
+		const x0 = nums[0], y0 = nums[1];
+		const xN = nums[nums.length - 2], yN = nums[nums.length - 1];
+		if (x0 !== xN || y0 !== yN) {
+			out.push(x0, y0);
+		}
+		return out;
 	}
 
 	// Point object array

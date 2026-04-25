@@ -12,6 +12,7 @@ export const viaHandlers: Record<string, (params: Record<string, any>) => Promis
 	},
 
 	'pcb.create.via': async (params) => {
+		validateViaSize(params.holeDiameter, params.diameter);
 		const via = await eda.pcb_PrimitiveVia.create(
 			params.net,
 			params.x,
@@ -54,4 +55,29 @@ export const viaHandlers: Record<string, (params: Record<string, any>) => Promis
 
 function round3(n: number): number {
 	return Math.round(n * 1000) / 1000;
+}
+
+// EasyEDA's via API uses MIL. Anything under ~3 mil is almost certainly the
+// caller passing mm by mistake (0.3 mm pad → reads back as 0/0 because the
+// runtime rounds tiny mil values to integers). Reject early with a clear hint.
+function validateViaSize(holeMil: number, diameterMil: number): void {
+	if (typeof holeMil !== 'number' || !Number.isFinite(holeMil) || holeMil <= 0) {
+		throw new Error('holeDiameter must be a positive number in mil. Use pcb_create_via_mm for mm input.');
+	}
+	if (typeof diameterMil !== 'number' || !Number.isFinite(diameterMil) || diameterMil <= 0) {
+		throw new Error('diameter must be a positive number in mil. Use pcb_create_via_mm for mm input.');
+	}
+	if (diameterMil < 6 || holeMil < 4) {
+		throw new Error(
+			`Via dimensions too small: hole=${holeMil} mil, diameter=${diameterMil} mil. ` +
+			`EasyEDA's via API uses mil (1 mm ≈ 39.37 mil). Sub-3-mil values typically mean ` +
+			`mm was passed by mistake — use pcb_create_via_mm({drill_mm, diameter_mm}) for mm.`,
+		);
+	}
+	if (diameterMil <= holeMil) {
+		throw new Error(
+			`diameter (${diameterMil} mil) must be greater than holeDiameter (${holeMil} mil) — ` +
+			`otherwise there is no annular ring and DRC will reject the via.`,
+		);
+	}
 }

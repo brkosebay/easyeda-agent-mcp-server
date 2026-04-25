@@ -25,7 +25,8 @@ Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA 
 | Multi-instance | When >1 EasyEDA window is open, pass `instance_id` (8-hex). Single window auto-selects. |
 | Compact mode | All `getAll`-style read tools default to `compact:true` — identity + key geometry only. Pass `compact:false` for full data including geometry source. |
 | Field projection | `fields:["a","b"]` projects to those keys. `filter:{net:"GND"}` filters items. `limit:N` truncates. |
-| Timeout | Default 45 s per call. Override per call with `_timeoutMs:300000` (5 min). Global default via `EDA_WS_TIMEOUT_MS` env. |
+| Timeout | Default 120 s per call. Override per call by including `_timeoutMs: 300000` **inside the tool's `arguments` object** (not as an MCP transport timeout). Global default via `EDA_WS_TIMEOUT_MS` env. The MCP client also has its own transport timeout (60 s default in the SDK) — bump that on the client if you raise `_timeoutMs` above it. |
+| Wait for ready | When spawning a fresh MCP server from a script, call `wait_for_extension` first. The extension may take 1–5 s to attach (peer notification or live-mode tick). |
 | Help inline | `pcb_help(topic)` returns long-form docs on demand for `polygon`, `layer`, `viaType`, `compact`, `units`, `primitives`, `timeout`. |
 
 ## Server / instance
@@ -44,6 +45,8 @@ Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA 
 | `editor_open_document` | Open a doc by UUID. |
 | `editor_get_open_tabs` | Open tabs and split-screen tree. |
 | `editor_screenshot` | PNG of current canvas (desktop Electron only — web app returns undefined). |
+| `pcb_screenshot_board` | One-shot: refresh + zoom-fit board + capture PNG. |
+| `wait_for_extension` | Block until the extension has attached. Use at the start of ad-hoc scripts. |
 | `editor_zoom_to_region` | Zoom to a rectangle. |
 | `editor_zoom_to` | Center on (x,y) with optional scale. |
 | `editor_zoom_to_all` | Fit all primitives. |
@@ -96,6 +99,7 @@ Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA 
 |---|---|
 | `pcb_drc_summarize` | Top-N violation groups by category/net/component. |
 | `pcb_repour_all` | Rebuild every pour; scope to net/layer; skip locked. |
+| `pcb_create_board_pour` | Copper pour bounded by the board outline minus an inset (default 20 mil). Computes bbox from layer-11 (BoardOutline) lines/arcs. For non-rectangular boards, fall back to `pcb_create_pour` with an explicit polygon. |
 | `pcb_connectivity_status` | Per-net audit: routed / pour_only / unrouted / single_pad. |
 | `pcb_manage_rule_config` | Get/save/rename/delete DRC rule configs. |
 | `pcb_manage_net_rules` | Net-rules / net-by-net / region rules. |
