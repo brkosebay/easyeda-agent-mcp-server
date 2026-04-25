@@ -154,7 +154,7 @@ Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA 
 |---|---|
 | `pcb_export` | Export gerber / bom / pick-and-place / 3D / pdf / netlist / dxf / altium / pads / autoroute_json / autolayout_json / dsn. Returns `{fileName, data (base64), size}`. |
 | `pcb_import` | Import autoroute_json / autolayout_json / autoroute_ses (FreeRouting result). |
-| `pcb_autoroute` | DSN export → `java -jar vendor/freerouting.jar` → SES import. Requires Java 11+ and a FreeRouting jar at `vendor/freerouting.jar` (or `FREEROUTING_JAR` env). |
+| `pcb_autoroute` | DSN export → `java -jar vendor/freerouting.jar` → SES import → canvas refresh → DRC summary. Requires Java 11+ and a FreeRouting jar at `vendor/freerouting.jar` (or `FREEROUTING_JAR` env). EasyEDA Pro's built-in autorouter is **not exposed via the extension API** — this FreeRouting wrapper is currently the only programmatic option. |
 
 ## Help and discovery
 

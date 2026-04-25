@@ -56,13 +56,10 @@ Use fileType for sub-formats: "xlsx"/"csv" (bom, pick_and_place), "step"/"obj" (
 
 	server.tool(
 		'pcb_autoroute',
-		`Run FreeRouting on the active PCB and import the result. Pipeline: pcb_export(dsn) → java -jar freerouting.jar → pcb_import(autoroute_ses). Requires:
-  - Java 11+ on PATH (or set JAVA_BIN env var)
-  - FreeRouting jar at vendor/freerouting.jar (or set FREEROUTING_JAR env var)
-Download the latest jar from https://github.com/freerouting/freerouting/releases. Returns the SES filename, byte size, and FreeRouting stdout/stderr tail. Locked tracks are preserved (passes -mp 100 -us global).`,
+		`EasyEDA has no built-in autorouter API; this tool runs external FreeRouting. Pipeline: DSN export → java -jar freerouting.jar → SES import → canvas refresh → DRC summary. Requires Java 11+ and a FreeRouting jar at vendor/freerouting.jar (or FREEROUTING_JAR env). Download the latest jar from https://github.com/freerouting/freerouting/releases. Returns sizes, paths, and a DRC summary so you can verify the routing immediately.`,
 		withDocumentParam({
-			passes: z.number().int().positive().optional().default(100).describe('Optimization passes (default 100)'),
-			timeoutSeconds: z.number().int().positive().optional().default(600).describe('Kill the Java process after this many seconds'),
+			passes: z.number().int().positive().optional().default(100).describe('Max optimization passes'),
+			timeoutSeconds: z.number().int().positive().optional().default(600).describe('Java process timeout (s)'),
 		}),
 		async ({ passes, timeoutSeconds, ...rest }) => {
 			const result = await runAutoroute(bridge, { passes: passes ?? 100, timeoutSeconds: timeoutSeconds ?? 600 }, rest);
@@ -101,7 +98,6 @@ async function runAutoroute(
 	const javaBin = process.env.JAVA_BIN || 'java';
 	const jarPath = process.env.FREEROUTING_JAR || resolve(process.cwd(), 'vendor/freerouting.jar');
 
-	// Verify the jar exists before we spend time exporting DSN.
 	try {
 		await access(jarPath);
 	} catch {
@@ -112,45 +108,84 @@ async function runAutoroute(
 		);
 	}
 
+	// Bridge timeout for DSN/SES round-trips on non-trivial boards. Big designs
+	// take 30-60s to serialize; the default 45s would 50/50 cut it.
+	const bridgeTimeoutMs = 5 * 60_000;
+
 	// 1. Export DSN from EasyEDA.
 	const dsnResult = (await bridge.send('pcb.manufacture.getDsnFile', {
 		...routingParams,
 		fileName: 'autoroute',
+		_timeoutMs: bridgeTimeoutMs,
 	})) as { fileName: string; data: string; size: number };
 
 	if (!dsnResult?.data) throw new Error('DSN export returned no data — is a PCB document open?');
 
-	// 2. Stage DSN to a temp dir, run FreeRouting.
 	const dir = await mkdtemp(join(tmpdir(), 'easyeda-autoroute-'));
 	const dsnFile = join(dir, dsnResult.fileName || 'autoroute.dsn');
 	const sesFile = dsnFile.replace(/\.dsn$/i, '.ses');
 	await writeFile(dsnFile, Buffer.from(dsnResult.data, 'base64'));
 
+	// 2. Run FreeRouting headless. Minimal flag set — `-de`/`-do`/`-mp` are
+	// stable across FreeRouting 1.x and 2.x. Earlier versions of this tool
+	// passed `-us global` which isn't a documented flag and could be ignored
+	// or misinterpreted depending on FreeRouting version.
 	const args = [
 		'-jar', jarPath,
 		'-de', dsnFile,
 		'-do', sesFile,
 		'-mp', String(opts.passes),
-		'-us', 'global',
 	];
 	const javaResult = await runJava(javaBin, args, opts.timeoutSeconds * 1000);
 
-	// 3. Read SES, ship it back through the import path.
+	// 3. Validate FreeRouting actually produced output before importing.
+	if (javaResult.code !== 0) {
+		throw new Error(
+			`FreeRouting exited with code ${javaResult.code}. ` +
+			`Common causes: jar built for newer Java than installed; insufficient memory; ` +
+			`unrecognized DSN structure.\n` +
+			`stderr tail:\n${javaResult.stderrTail || '(empty)'}\n` +
+			`stdout tail:\n${javaResult.stdoutTail || '(empty)'}\n` +
+			`DSN file kept at: ${dsnFile}`,
+		);
+	}
+
 	let sesBytes: Buffer;
 	try {
 		sesBytes = await readFile(sesFile);
 	} catch {
 		throw new Error(
-			`FreeRouting did not produce a SES file at ${sesFile}. Java exited with code ${javaResult.code}.\n` +
-			`stderr tail:\n${javaResult.stderrTail}`,
+			`FreeRouting exited cleanly but produced no SES file at ${sesFile}. ` +
+			`This usually means the design has unconstrained nets or class definitions FreeRouting can't parse.\n` +
+			`stdout tail:\n${javaResult.stdoutTail || '(empty)'}`,
 		);
 	}
+	if (sesBytes.length === 0) {
+		throw new Error(`FreeRouting wrote an empty SES file. The router likely failed silently. DSN kept at: ${dsnFile}`);
+	}
 
+	// 4. Import the SES result.
 	await bridge.send('pcb.manufacture.importAutoRouteSes', {
 		...routingParams,
 		fileName: dsnResult.fileName?.replace(/\.dsn$/i, '.ses') || 'autoroute.ses',
 		data: sesBytes.toString('base64'),
+		_timeoutMs: bridgeTimeoutMs,
 	});
+
+	// 5. Force the canvas to redraw, then run DRC for a quick sanity report.
+	await bridge.send('pcb.document.refresh', { ...routingParams, zoom: false }).catch(() => {/* non-fatal */});
+
+	let drcSummary: any = null;
+	try {
+		drcSummary = await bridge.send('pcb.drc.summarize', {
+			...routingParams,
+			groupBy: 'category',
+			top: 10,
+			_timeoutMs: bridgeTimeoutMs,
+		});
+	} catch {
+		/* DRC is best-effort */
+	}
 
 	return {
 		dsnSize: dsnResult.size,
@@ -159,7 +194,9 @@ async function runAutoroute(
 		passes: opts.passes,
 		stdoutTail: javaResult.stdoutTail,
 		stderrTail: javaResult.stderrTail,
-		workDir: dir,
+		dsnFile,
+		sesFile,
+		drcSummary,
 	};
 }
 
