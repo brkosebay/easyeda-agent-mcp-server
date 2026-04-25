@@ -280,6 +280,12 @@ async function getInstanceInfo(): Promise<Record<string, any>> {
 		const proj = project as any;
 		const doc = currentDoc as any;
 
+		// Seed our caches from this fresh fetch.
+		if (doc?.tabId) {
+			currentDocUuid = doc.tabId;
+			if (doc.documentType != null) docTypeCache.set(doc.tabId, doc.documentType);
+		}
+
 		return {
 			instanceId,
 			projectName: proj?.name ?? proj?.title,
@@ -295,13 +301,29 @@ async function getInstanceInfo(): Promise<Record<string, any>> {
 
 allHandlers['instance.getInfo'] = async () => getInstanceInfo();
 
-async function requireDocumentType(method: string): Promise<void> {
+// Cache: docUuid → documentType (1 = schematic, 3 = pcb). Doc type is
+// immutable for the life of a document so this cache is safe.
+const docTypeCache: Map<string, number> = new Map();
+
+// Tracks the currently-active document UUID so we can skip redundant
+// `openDocument` calls (which switch tabs and cost ~50ms each).
+let currentDocUuid: string | undefined;
+
+async function requireDocumentType(method: string, docUuid: string | undefined): Promise<void> {
 	const requiresPcb = method.startsWith('pcb.');
 	const requiresSch = method.startsWith('sch.');
 	if (!requiresPcb && !requiresSch) return;
 
-	const doc = await eda.dmt_SelectControl.getCurrentDocumentInfo();
-	const docType = doc?.documentType;
+	let docType: number | undefined;
+	if (docUuid && docTypeCache.has(docUuid)) {
+		docType = docTypeCache.get(docUuid);
+	} else {
+		const doc = await eda.dmt_SelectControl.getCurrentDocumentInfo();
+		docType = doc?.documentType as number | undefined;
+		const tabId = (doc as any)?.tabId as string | undefined;
+		if (tabId && docType != null) docTypeCache.set(tabId, docType);
+		if (tabId) currentDocUuid = tabId;
+	}
 
 	if (requiresPcb && docType !== 3) {
 		const current = docType === 1 ? ' (a schematic is currently open)' : docType != null ? '' : ' (no document is open)';
@@ -315,6 +337,18 @@ async function requireDocumentType(method: string): Promise<void> {
 			`This tool requires a schematic document, but the currently active tab is not a schematic${current}. Pass a schematic document UUID as the "document" parameter, or use editor_open_document to switch.`,
 		);
 	}
+}
+
+// Open a document only if it isn't the current one. Returns a Promise that
+// resolves once the doc is active. No-op when the requested doc matches the
+// already-active doc — saves ~50ms and avoids the visual tab flicker.
+function ensureDocument(docUuid: string | undefined): Promise<unknown> {
+	if (!docUuid) return Promise.resolve();
+	if (currentDocUuid === docUuid) return Promise.resolve();
+	return eda.dmt_EditorControl.openDocument(docUuid).then((res) => {
+		currentDocUuid = docUuid;
+		return res;
+	});
 }
 
 // === WS message handler ==================================================
@@ -372,11 +406,11 @@ function handleMessage(extensionUuid: string, port: number, event: MessageEvent<
 		}
 
 		const docUuid = document ? String(document).split('@')[0] : undefined;
-		const switchDoc = docUuid ? eda.dmt_EditorControl.openDocument(docUuid) : Promise.resolve();
+		const switchDoc = ensureDocument(docUuid);
 
 		const dispatch = async () => {
 			await switchDoc;
-			await requireDocumentType(method);
+			await requireDocumentType(method, docUuid);
 			const result = await handler(handlerParams);
 			return applyQueryParams(result, qp);
 		};

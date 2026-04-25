@@ -15,7 +15,7 @@ export function registerLibTools(server: McpServer, bridge: WebSocketBridge): vo
 		}),
 		async (params) => {
 			const result = await bridge.send('lib.device.search', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -28,7 +28,7 @@ export function registerLibTools(server: McpServer, bridge: WebSocketBridge): vo
 		}),
 		async ({ deviceUuid, libraryUuid, instance_id }) => {
 			const result = await bridge.send('lib.device.get', { deviceUuid, libraryUuid, instance_id });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -43,7 +43,7 @@ export function registerLibTools(server: McpServer, bridge: WebSocketBridge): vo
 		}),
 		async ({ lcscIds, libraryUuid, instance_id }) => {
 			const result = await bridge.send('lib.device.getByLcscIds', { lcscIds, libraryUuid, instance_id });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -53,7 +53,7 @@ export function registerLibTools(server: McpServer, bridge: WebSocketBridge): vo
 		withInstanceParam({}),
 		async ({ instance_id }) => {
 			const result = await bridge.send('lib.getSystemLibraryUuid', { instance_id });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -63,7 +63,7 @@ export function registerLibTools(server: McpServer, bridge: WebSocketBridge): vo
 		withInstanceParam({}),
 		async ({ instance_id }) => {
 			const result = await bridge.send('lib.getAllLibraries', { instance_id });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

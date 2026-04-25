@@ -12,7 +12,7 @@ export function registerPourFillTools(server: McpServer, bridge: WebSocketBridge
 		},
 		async ({ net, layer }) => {
 			const result = await bridge.send('pcb.getAll.pour', { net, layer });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -37,7 +37,7 @@ export function registerPourFillTools(server: McpServer, bridge: WebSocketBridge
 		},
 		async (params) => {
 			const result = await bridge.send('pcb.create.pour', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -49,7 +49,7 @@ export function registerPourFillTools(server: McpServer, bridge: WebSocketBridge
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.pour', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -62,7 +62,7 @@ export function registerPourFillTools(server: McpServer, bridge: WebSocketBridge
 		},
 		async ({ layer, net }) => {
 			const result = await bridge.send('pcb.getAll.fill', { layer, net });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -74,7 +74,7 @@ export function registerPourFillTools(server: McpServer, bridge: WebSocketBridge
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.fill', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

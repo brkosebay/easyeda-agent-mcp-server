@@ -54,7 +54,7 @@ async function main() {
 							documentType: info.documentType,
 						})),
 						allowAllOrigins: process.env.EDA_WS_ALLOW_ALL_ORIGINS === '1',
-					}, null, 2),
+					}),
 				}],
 			};
 		},
@@ -93,7 +93,7 @@ async function main() {
 						note: instances.length === 1
 							? 'Only one instance connected — instance_id can be omitted from tool calls (auto-selected).'
 							: 'Multiple instances connected — pass instance_id to tool calls to target a specific instance.',
-					}, null, 2),
+					}),
 				}],
 			};
 		},

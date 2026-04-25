@@ -579,7 +579,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.extract.design', { ...params, _timeoutMs: 120_000 });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -592,7 +592,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzePowerTree(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -605,7 +605,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzeDecoupling(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -618,7 +618,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzePassiveNetworks(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -631,7 +631,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzeConnectors(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -644,7 +644,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzeProtection(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -657,7 +657,7 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzeEsdCoverage(snap as DesignSnapshot);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

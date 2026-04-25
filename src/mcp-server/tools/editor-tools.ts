@@ -10,7 +10,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({}),
 		async (params) => {
 			const result = await bridge.send('editor.project.getStructure', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -20,7 +20,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({}),
 		async (params) => {
 			const result = await bridge.send('editor.getCurrentDocument', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -32,7 +32,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('editor.openDocument', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -42,7 +42,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({}),
 		async (params) => {
 			const result = await bridge.send('editor.getOpenTabs', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -57,12 +57,12 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 			while (Date.now() < deadline) {
 				if (bridge.isConnected()) {
 					const instances = bridge.getConnectedInstances();
-					return { content: [{ type: 'text', text: JSON.stringify({ ready: true, instances }, null, 2) }] };
+					return { content: [{ type: 'text', text: JSON.stringify({ ready: true, instances }) }] };
 				}
 				await new Promise((r) => setTimeout(r, 250));
 			}
 			return {
-				content: [{ type: 'text', text: JSON.stringify({ ready: false, hint: 'Extension did not attach in time. Click Connect Claude in EasyEDA, or check that the extension is loaded.' }, null, 2) }],
+				content: [{ type: 'text', text: JSON.stringify({ ready: false, hint: 'Extension did not attach in time. Click Connect Claude in EasyEDA, or check that the extension is loaded.' }) }],
 				isError: true,
 			};
 		},
@@ -134,7 +134,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('editor.zoomToRegion', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -149,7 +149,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('editor.zoomTo', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -159,7 +159,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({ tabId: z.string().optional() }),
 		async (params) => {
 			const result = await bridge.send('editor.zoomToAllPrimitives', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -169,7 +169,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({ tabId: z.string().optional() }),
 		async (params) => {
 			const result = await bridge.send('editor.zoomToSelected', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -185,7 +185,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('editor.addMarkers', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -195,7 +195,7 @@ export function registerEditorTools(server: McpServer, bridge: WebSocketBridge):
 		withInstanceParam({ tabId: z.string().optional() }),
 		async (params) => {
 			const result = await bridge.send('editor.clearMarkers', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

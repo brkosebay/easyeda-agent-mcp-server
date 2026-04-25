@@ -16,7 +16,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ left, right, top, bottom }) => {
 			const result = await bridge.send('pcb.document.navigateToRegion', { left, right, top, bottom });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -26,7 +26,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		{},
 		async () => {
 			const result = await bridge.send('pcb.document.zoomToBoardOutline');
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -38,7 +38,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ zoom }) => {
 			const result = await bridge.send('pcb.document.refresh', { zoom });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -48,7 +48,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		{},
 		async () => {
 			const result = await bridge.send('pcb.layer.getStatus');
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -58,7 +58,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		{},
 		async () => {
 			const result = await bridge.send('pcb.document.getCanvasFilter');
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -73,7 +73,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ x, y }) => {
 			const result = await bridge.send('pcb.document.getPrimitiveAtPoint', { x, y });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -98,7 +98,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 				bottom,
 				leftToRight,
 			});
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -110,7 +110,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		{},
 		async () => {
 			const result = await bridge.send('pcb.document.getCanvasOrigin');
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -123,7 +123,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ offsetX, offsetY }) => {
 			const result = await bridge.send('pcb.document.setCanvasOrigin', { offsetX, offsetY });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -136,7 +136,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ x, y }) => {
 			const result = await bridge.send('pcb.document.convertCanvasToData', { x, y });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -149,7 +149,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ x, y }) => {
 			const result = await bridge.send('pcb.document.convertDataToCanvas', { x, y });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -163,7 +163,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ uuid }) => {
 			const result = await bridge.send('pcb.document.importChanges', { uuid });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -179,7 +179,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.component', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -193,7 +193,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.line', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -207,7 +207,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.polyline', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -221,7 +221,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.via', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -235,7 +235,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.pad', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -249,7 +249,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.pour', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -263,7 +263,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.fill', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -277,7 +277,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.arc', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -291,7 +291,7 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.region', { primitiveIds });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

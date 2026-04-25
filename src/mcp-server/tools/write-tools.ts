@@ -46,7 +46,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.line', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -61,7 +61,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.polyline', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -78,7 +78,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.via', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -95,7 +95,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.via.mm', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -114,7 +114,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.arc', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -131,7 +131,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.pad', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -150,7 +150,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.pour', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -165,7 +165,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.fill', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -181,7 +181,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.region', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -201,7 +201,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.route.orthogonal', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -215,7 +215,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.deleteByFilter.line', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -235,7 +235,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async ({ primitiveId, instance_id, document, ...property }) => {
 			const result = await bridge.send('pcb.modify.component', { primitiveId, property, instance_id, document });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -254,7 +254,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async ({ primitiveId, instance_id, document, ...property }) => {
 			const result = await bridge.send('pcb.modify.line', { primitiveId, property, instance_id, document });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -268,7 +268,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async ({ type, ...rest }) => {
 			const result = await bridge.send(MODIFY_HANDLER_MAP[type], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -283,7 +283,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async ({ type, ...rest }) => {
 			const result = await bridge.send(DELETE_HANDLER_MAP[type], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -297,7 +297,7 @@ export function registerWriteTools(server: McpServer, bridge: WebSocketBridge): 
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.save', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

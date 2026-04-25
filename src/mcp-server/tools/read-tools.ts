@@ -43,7 +43,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async ({ type, compact, ...rest }) => {
 			const result = await bridge.send(GET_ALL_HANDLER_MAP[type], { ...rest, compact: compact ?? true });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -56,7 +56,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async ({ type, compact, ...rest }) => {
 			const result = await bridge.send(GET_BY_ID_HANDLER_MAP[type], { ...rest, compact: compact ?? true });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -66,7 +66,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.net.getAllNames', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -79,7 +79,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async ({ compact, ...rest }) => {
 			const result = await bridge.send('pcb.net.getPrimitives', { ...rest, compact: compact ?? true });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -89,7 +89,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withDocumentParam({ net: z.string().describe('Net name') }),
 		async (params) => {
 			const result = await bridge.send('pcb.net.getLength', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -99,7 +99,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.getRuleConfiguration', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -109,7 +109,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.getNetRules', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -122,7 +122,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.pad.findByRef', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -134,7 +134,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async ({ compact, ...rest }) => {
 			const result = await bridge.send('pcb.component.getPins', { ...rest, compact: compact ?? true });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -148,7 +148,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.check', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -158,7 +158,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withQueryParams({}),
 		async ({ compact, ...rest }) => {
 			const result = await bridge.send('pcb.select.getAll', { ...rest, compact: compact ?? true });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 

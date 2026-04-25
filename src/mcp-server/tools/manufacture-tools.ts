@@ -50,7 +50,7 @@ Use fileType for sub-formats: "xlsx"/"csv" (bom, pick_and_place), "step"/"obj" (
 		}),
 		async ({ format, ...rest }) => {
 			const result = await bridge.send(EXPORT_HANDLER_MAP[format], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -63,7 +63,7 @@ Use fileType for sub-formats: "xlsx"/"csv" (bom, pick_and_place), "step"/"obj" (
 		}),
 		async ({ passes, timeoutSeconds, ...rest }) => {
 			const result = await runAutoroute(bridge, { passes: passes ?? 100, timeoutSeconds: timeoutSeconds ?? 600 }, rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -80,7 +80,7 @@ Formats: autoroute_json (JSON autoroute), autolayout_json (JSON autolayout), aut
 		}),
 		async ({ format, ...rest }) => {
 			const result = await bridge.send(IMPORT_HANDLER_MAP[format], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

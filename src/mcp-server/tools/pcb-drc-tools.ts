@@ -64,7 +64,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.summarize', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -83,7 +83,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.create.boardPour', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -96,7 +96,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.pour.repourAll', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -108,7 +108,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.net.connectivityStatus', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -139,7 +139,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(RULE_CONFIG_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -161,7 +161,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(NET_RULES_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -187,7 +187,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(NET_CLASS_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -218,10 +218,10 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 				if (negativeNet !== undefined) {
 					results.negative = await bridge.send('pcb.drc.modifyDiffPairNegativeNet', { name, negativeNet, ...rest });
 				}
-				return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+				return { content: [{ type: 'text', text: JSON.stringify(results) }] };
 			}
 			const result = await bridge.send(DIFF_PAIR_HANDLERS[action], { name, positiveNet, negativeNet, ...rest });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -247,7 +247,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(EQUAL_LENGTH_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -271,7 +271,7 @@ export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge):
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(PAD_PAIR_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

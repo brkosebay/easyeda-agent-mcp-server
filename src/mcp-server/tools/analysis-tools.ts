@@ -12,7 +12,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.net.highlight', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -24,7 +24,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.net.select', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -34,7 +34,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.select.clear', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -47,7 +47,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.navigateTo', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -62,7 +62,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.navigateToRegion', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -72,7 +72,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.zoomToBoardOutline', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -84,7 +84,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.refresh', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -94,7 +94,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.layer.getStatus', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -104,7 +104,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.getCanvasFilter', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -117,7 +117,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.getPrimitiveAtPoint', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -136,7 +136,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.getPrimitivesInRegion', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -151,10 +151,10 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		async ({ action, ...rest }) => {
 			if (action === 'get') {
 				const result = await bridge.send('pcb.document.getCanvasOrigin', rest);
-				return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+				return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 			}
 			const result = await bridge.send('pcb.document.setCanvasOrigin', rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -172,7 +172,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 					? 'pcb.document.convertCanvasToData'
 					: 'pcb.document.convertDataToCanvas';
 			const result = await bridge.send(method, rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -184,7 +184,7 @@ export function registerAnalysisTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.document.importChanges', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

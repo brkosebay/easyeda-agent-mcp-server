@@ -23,7 +23,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.create', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -67,7 +67,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.createNetFlag', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -106,7 +106,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.createNetPort', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -120,7 +120,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.delete', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -145,7 +145,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async ({ primitiveId, instance_id, document, ...property }) => {
 			const result = await bridge.send('sch.component.modify', { primitiveId, property, instance_id, document });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -176,7 +176,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				params.lineType = Number(lineType);
 			}
 			const result = await bridge.send('sch.wire.create', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -190,7 +190,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.wire.delete', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -217,7 +217,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				property.lineType = Number(lineType);
 			}
 			const result = await bridge.send('sch.wire.modify', { primitiveId, property, instance_id, document });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -250,7 +250,7 @@ Pin format: "U1_1" (designator_pinNumber). Components selects the whole componen
 				instance_id,
 				document,
 			});
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -266,7 +266,7 @@ Pin format: "U1_1" (designator_pinNumber). Components selects the whole componen
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.netlist.set', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -276,7 +276,7 @@ Pin format: "U1_1" (designator_pinNumber). Components selects the whole componen
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('sch.document.save', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -286,7 +286,7 @@ Pin format: "U1_1" (designator_pinNumber). Components selects the whole componen
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('sch.document.importChanges', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

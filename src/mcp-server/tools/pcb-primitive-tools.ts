@@ -20,7 +20,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.via', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -38,7 +38,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.polyline', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -54,7 +54,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.component', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -74,7 +74,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async (params) => {
 			const result = await bridge.send('pcb.create.pad', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -93,7 +93,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.pad', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -107,7 +107,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.pad', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -122,7 +122,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ net, layer }) => {
 			const result = await bridge.send('pcb.getAll.arc', { net, layer });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -142,7 +142,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async (params) => {
 			const result = await bridge.send('pcb.create.arc', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -163,7 +163,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.arc', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -177,7 +177,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.arc', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -192,7 +192,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ layer, ruleType }) => {
 			const result = await bridge.send('pcb.getAll.region', { layer, ruleType });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -211,7 +211,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async (params) => {
 			const result = await bridge.send('pcb.create.region', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -228,7 +228,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.region', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -242,7 +242,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ ids }) => {
 			const result = await bridge.send('pcb.delete.region', { ids });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -263,7 +263,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async (params) => {
 			const result = await bridge.send('pcb.create.fill', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -280,7 +280,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.fill', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -303,7 +303,7 @@ export function registerPcbPrimitiveTools(server: McpServer, bridge: WebSocketBr
 		},
 		async ({ primitiveId, ...property }) => {
 			const result = await bridge.send('pcb.modify.pour', { primitiveId, property });
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

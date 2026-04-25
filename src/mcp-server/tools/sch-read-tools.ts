@@ -21,7 +21,7 @@ Note: name often contains EasyEDA template expressions like ={Manufacturer Part}
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.getAll', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -35,7 +35,7 @@ Note: name often contains EasyEDA template expressions like ={Manufacturer Part}
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.get', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -50,7 +50,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.component.getAllPins', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -65,7 +65,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.wire.getAll', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -79,7 +79,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.wire.get', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -89,7 +89,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		withQueryParams({}),
 		async (params) => {
 			const result = await bridge.send('sch.select.getAll', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -99,7 +99,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('sch.select.getAllIds', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -111,7 +111,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.primitive.get', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -123,7 +123,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.primitive.getType', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -135,7 +135,7 @@ Pins connected to $-prefixed nets (like $R11_1) are on unnamed nets that still c
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.primitive.getBBox', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -152,7 +152,7 @@ Only use this tool when you need a specific netlist export format (Allegro, PADS
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.netlist.get', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -183,7 +183,7 @@ Use the depth parameter (default 1) to automatically trace through $-prefixed ne
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.connectivity.get', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
@@ -196,7 +196,7 @@ Use the depth parameter (default 1) to automatically trace through $-prefixed ne
 		}),
 		async (params) => {
 			const result = await bridge.send('sch.drc.check', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }

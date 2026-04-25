@@ -62,7 +62,7 @@ export function registerPcbLayerTools(server: McpServer, bridge: WebSocketBridge
 		}),
 		async ({ action, ...rest }) => {
 			const result = await bridge.send(LAYER_HANDLERS[action], rest);
-			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 }
