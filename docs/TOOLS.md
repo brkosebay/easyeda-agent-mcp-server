@@ -6,14 +6,17 @@ This server bridges Claude (or any MCP client) to the EasyEDA Pro extension runn
 Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA extension  ──▶  eda.* APIs
 ```
 
-## Modes: static vs dynamic toolsets
+## Tool surface — dynamic toolsets (default)
 
-The MCP server can present its catalog two ways:
+The agent sees only **3 meta-tools** in the system prompt:
 
-- **Static** (default): every tool is registered individually. The agent sees ~108 tools in its system prompt. Maximum compatibility — works with every MCP client.
-- **Dynamic** (`EDA_DYNAMIC_TOOLSETS=1`): the agent sees only **3 meta-tools** — `search_tools`, `describe_tools`, `execute_tool`. The 100+ concrete tools live in a server-side catalog; the agent discovers them on demand via local-embedding semantic search. Saves ~95% of system-prompt tokens at the cost of ~2 extra tool calls per task.
+- `search_tools(query, tags?)` — semantic search across the catalog (local MiniLM embeddings, sub-200 ms cached). Returns ranked tool names + briefs.
+- `describe_tools(names[])` — JSON-schema-style parameter info for the tools you picked. Schemas are 60-80% of static-toolset token cost; lazy-loading them is the biggest saving.
+- `execute_tool(name, args)` — validates args against the tool's Zod shape and runs the underlying handler. Same return shape as the static surface.
 
-To enable dynamic mode, set `EDA_DYNAMIC_TOOLSETS=1` in the MCP server's environment. The first `search_tools` call takes ~2 s while the MiniLM model loads; subsequent calls are sub-200 ms (vectors cached at `.cache/tool-embeddings.json`).
+The 100+ concrete tools live in a server-side catalog. The first `search_tools` call takes ~2 s while the embedding model loads (Xenova/all-MiniLM-L6-v2, ~22 MB); subsequent calls are sub-200 ms with vectors cached at `.cache/tool-embeddings.json`. Falls back to keyword scoring if the model can't load.
+
+**Opt-out**: set `EDA_DYNAMIC_TOOLSETS=0` to expose every tool individually (the legacy ~108-tool static surface). Useful for older MCP clients that don't handle meta-tool discovery.
 
 ### Dynamic-mode workflow
 

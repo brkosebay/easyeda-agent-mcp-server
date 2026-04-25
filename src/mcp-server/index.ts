@@ -17,7 +17,11 @@ import { registerSchAnalysisTools } from './tools/sch-analysis-tools';
 
 const PORT_RANGE_START = Number(process.env.EDA_WS_PORT) || 15168;
 const PORT_RANGE_SIZE = Number(process.env.EDA_WS_PORT_RANGE) || 40;
-const DYNAMIC_TOOLSETS = process.env.EDA_DYNAMIC_TOOLSETS === '1';
+// Dynamic toolsets are the default — 3 meta-tools (search_tools,
+// describe_tools, execute_tool) instead of 100+ static schemas in the
+// system prompt. Set EDA_DYNAMIC_TOOLSETS=0 to opt out and use the
+// static surface (kept as a safety hatch for non-MCP-aware clients).
+const DYNAMIC_TOOLSETS = process.env.EDA_DYNAMIC_TOOLSETS !== '0';
 
 async function main() {
 	const bridge = await WebSocketBridge.startOnAvailablePort(PORT_RANGE_START, PORT_RANGE_SIZE);
