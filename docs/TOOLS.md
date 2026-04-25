@@ -189,12 +189,15 @@ These tools turn the schematic into actionable findings. `sch_extract_design` pr
 5. `pcb_drc_summarize` instead of `pcb_run_drc` when you only need the count and top categories.
 6. `pcb_connectivity_status` summarises hundreds of nets in one call.
 
-## Connection model
+## Connection model — sticky primary
 
-- Extension keeps **one** open WebSocket to an MCP server (the *primary*).
-- Other discovered ports go on a standby list; new MCP sessions auto-promote (matches "I just opened a new terminal, use that one").
-- Heartbeat: 20 s ping interval, 25 s quiet → ping, 45 s silence → drop.
-- Reset state: click **Claude → Disconnect Claude**, then **Connect Claude**.
+Once the extension is bonded to an MCP server, it **stays bonded** until you explicitly switch via the EasyEDA menu. This avoids the "keeps reconnecting" churn when multiple Claude / Codex sessions are running and cycling.
+
+- **Connect Claude** (menu): if not connected, scan and bond to the first server that answers. If already connected, release the current primary and re-scan — picks up the newest server. This is the only way to switch chats.
+- **Disconnect Claude** (menu): release the primary, no scan.
+- **`newAgent` peer notification** (a fresh MCP server starts in another chat): adds the new server to the standby list **without auto-promoting**. To switch to it, click Connect Claude.
+- **Primary's MCP server shuts down** (terminal closed, process killed): primary is released. Click Connect Claude to bond to whatever else is running.
+- **Heartbeat**: 20 s ping interval, 25 s quiet → ping, 45 s silence → drop. The dropped MCP server's tool calls fail until you reconnect.
 
 ## Environment
 

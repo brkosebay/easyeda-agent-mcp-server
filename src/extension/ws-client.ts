@@ -369,8 +369,11 @@ function handleShutdown(extensionUuid: string, port: number): void {
 
 	if (primary.current?.port === port) {
 		primary.current = null;
-		showInfo(`Claude MCP Server on port ${port} shut down`);
-		promoteFromStandby(extensionUuid);
+		showInfo(`Claude MCP Server on port ${port} shut down — click Connect Claude to attach to another session`);
+		// Sticky model: do NOT auto-promote a standby. Switching primaries
+		// without an explicit user action causes "keeps reconnecting" churn
+		// when multiple Claude sessions cycle. The user reconnects via the
+		// Claude → Connect Claude menu when ready.
 	}
 }
 
@@ -381,7 +384,7 @@ function dropConnection(extensionUuid: string, port: number): void {
 
 	if (primary.current?.port === port) {
 		primary.current = null;
-		promoteFromStandby(extensionUuid);
+		// Same sticky semantics as handleShutdown — no auto-promote.
 	}
 
 	try {
@@ -412,6 +415,8 @@ function promoteOrConnect(extensionUuid: string, port: number, agentId: string):
 	openWs(extensionUuid, port, /* preferPrimary */ true);
 }
 
+// Used only by the explicit Connect Claude flow now — the lifecycle paths
+// no longer auto-promote on primary loss (sticky model).
 function promoteFromStandby(extensionUuid: string): void {
 	if (primary.current != null) return;
 
@@ -419,10 +424,9 @@ function promoteFromStandby(extensionUuid: string): void {
 		.sort((a, b) => b[1].lastSeen - a[1].lastSeen);
 	for (const [port] of candidates) {
 		openWs(extensionUuid, port, true);
-		return; // try one at a time; if it fails the timeout will trigger another pass
+		return;
 	}
 
-	// No standby — kick off a fresh scan.
 	scanForServers(extensionUuid);
 }
 
@@ -493,10 +497,17 @@ function scanForServers(extensionUuid: string): void {
 	}, PROBE_TIMEOUT_MS + 500);
 }
 
+// Connect Claude (menu button or auto-connect): explicit user intent.
+// If already connected, demote the current primary and re-scan to pick the
+// newest hello — lets users switch chats without first hitting Disconnect.
+// If not connected, just scan.
 export function connectToMcpServers(extensionUuid: string): void {
 	if (primary.current) {
-		showInfo(`Already connected to Claude on port ${primary.current.port}`);
-		return;
+		const oldPort = primary.current.port;
+		showInfo(`Reconnecting — releasing port ${oldPort} and re-scanning`);
+		primary.current = null;
+		closeWs(extensionUuid, oldPort);
+		standby.delete(oldPort);
 	}
 	scanForServers(extensionUuid);
 }
