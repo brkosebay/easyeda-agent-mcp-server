@@ -1,27 +1,42 @@
+import { flattenState, flattenStateArray, normalizeLayer, normalizePolygon } from './_utils';
+
 export const trackHandlers: Record<string, (params: Record<string, any>) => Promise<any>> = {
 	// Line
 	'pcb.getAll.line': async (params) => {
-		return eda.pcb_PrimitiveLine.getAll(params.net, params.layer, params.primitiveLock);
+		const all = await eda.pcb_PrimitiveLine.getAll(params.net, normalizeLayer(params.layer), params.primitiveLock);
+		return flattenStateArray(all);
 	},
 
 	'pcb.get.line': async (params) => {
-		return eda.pcb_PrimitiveLine.get(params.primitiveIds);
+		const result = await eda.pcb_PrimitiveLine.get(params.primitiveIds);
+		return Array.isArray(result) ? flattenStateArray(result) : flattenState(result);
 	},
 
 	'pcb.create.line': async (params) => {
-		return eda.pcb_PrimitiveLine.create(
+		const line = await eda.pcb_PrimitiveLine.create(
 			params.net,
-			params.layer,
+			normalizeLayer(params.layer),
 			params.startX,
 			params.startY,
 			params.endX,
 			params.endY,
 			params.lineWidth,
 		);
+		return flattenState(line);
 	},
 
 	'pcb.modify.line': async (params) => {
-		return eda.pcb_PrimitiveLine.modify(params.primitiveId, params.property);
+		const property = { ...params.property };
+		if (property.layer != null) property.layer = normalizeLayer(property.layer);
+		const result = await eda.pcb_PrimitiveLine.modify(params.primitiveId, property);
+		// Always re-fetch and return actual state — modify return value can mask
+		// "succeeded but didn't persist" on properties like lineWidth.
+		const after = await eda.pcb_PrimitiveLine.get(params.primitiveId);
+		const flat = flattenState(after);
+		const persisted = !!flat && Object.entries(property).every(([k, v]) =>
+			v == null || (flat as any)[k] === v,
+		);
+		return { modified: !!result, persisted, after: flat, attempted: property };
 	},
 
 	'pcb.delete.line': async (params) => {
@@ -30,22 +45,61 @@ export const trackHandlers: Record<string, (params: Record<string, any>) => Prom
 
 	// Polyline
 	'pcb.getAll.polyline': async (params) => {
-		return eda.pcb_PrimitivePolyline.getAll(params.net, params.layer, params.primitiveLock);
+		const all = await eda.pcb_PrimitivePolyline.getAll(params.net, normalizeLayer(params.layer), params.primitiveLock);
+		return flattenStateArray(all);
 	},
 
 	'pcb.get.polyline': async (params) => {
-		return eda.pcb_PrimitivePolyline.get(params.primitiveIds);
+		const result = await eda.pcb_PrimitivePolyline.get(params.primitiveIds);
+		return Array.isArray(result) ? flattenStateArray(result) : flattenState(result);
 	},
 
 	'pcb.create.polyline': async (params) => {
-		return eda.pcb_PrimitivePolyline.create(params.net, params.layer, params.polygon, params.lineWidth);
+		const polygonSource = normalizePolygon(params.polygon);
+		const polygon = eda.pcb_MathPolygon.createPolygon(polygonSource as any);
+		if (!polygon) throw new Error(buildPolygonError('polyline', params.polygon, polygonSource));
+		const result = await eda.pcb_PrimitivePolyline.create(params.net, normalizeLayer(params.layer), polygon, params.lineWidth);
+		return flattenState(result);
 	},
 
 	'pcb.modify.polyline': async (params) => {
-		return eda.pcb_PrimitivePolyline.modify(params.primitiveId, params.property);
+		const property = { ...params.property };
+		if (property.layer != null) property.layer = normalizeLayer(property.layer);
+		const result = await eda.pcb_PrimitivePolyline.modify(params.primitiveId, property);
+		return flattenState(result);
 	},
 
 	'pcb.delete.polyline': async (params) => {
 		return eda.pcb_PrimitivePolyline.delete(params.ids);
 	},
+
+	'pcb.deleteByFilter.line': async (params) => {
+		const layer = params.layer != null ? normalizeLayer(params.layer) : undefined;
+		const all = await eda.pcb_PrimitiveLine.getAll(params.net, layer, undefined);
+		let lines = all || [];
+
+		if (params.preserveLocked) {
+			lines = lines.filter((l: any) => !l.getState_PrimitiveLock?.());
+		}
+
+		const ids = lines.map((l: any) => l.getState_PrimitiveId?.()).filter(Boolean);
+		if (ids.length === 0) return { deletedCount: 0, ids: [] };
+		const ok = await eda.pcb_PrimitiveLine.delete(ids);
+		return { deletedCount: ok ? ids.length : 0, ids };
+	},
 };
+
+function buildPolygonError(label: string, original: any, normalized: any): string {
+	const origKind = Array.isArray(original)
+		? `array len=${original.length}, first=${JSON.stringify(original[0])}`
+		: typeof original;
+	const normKind = Array.isArray(normalized)
+		? `["${normalized[0]}", ... len=${normalized.length}]`
+		: typeof normalized;
+	return (
+		`Invalid ${label} polygon — eda.pcb_MathPolygon.createPolygon returned undefined.\n` +
+		`Input: ${origKind}\nNormalized: ${normKind}\n` +
+		`Accepted forms: {points: [{x,y},...]}, [{x,y},...], ["L",x1,y1,x2,y2,...,x1,y1], ["R",cx,cy,w,h,rot,radius]. ` +
+		`Pour/fill/region need a CLOSED ring on a copper layer.`
+	);
+}

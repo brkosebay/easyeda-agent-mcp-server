@@ -57,8 +57,10 @@ export class WebSocketBridge {
 	private readonly timeout: number;
 	readonly agentId: string;
 
-	constructor(private readonly port: number = 15168, timeout = 45000) {
-		this.timeout = timeout;
+	constructor(private readonly port: number = 15168, timeout?: number) {
+		// Default 45s; can be overridden via EDA_WS_TIMEOUT_MS env (whole-number ms).
+		const envTimeout = Number(process.env.EDA_WS_TIMEOUT_MS);
+		this.timeout = timeout ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 45_000);
 		this.agentId = randomBytes(8).toString('hex');
 	}
 
@@ -147,6 +149,23 @@ export class WebSocketBridge {
 
 				console.error(`[Bridge] EDA Pro Extension connected (instance: ${instanceId})`);
 
+				// If a previous WS for this instance is still open, the extension
+				// reconnected (page reload, network blip). Close the old one and
+				// fail any outstanding requests so we don't leak handles or send
+				// to a dead socket.
+				const existing = this.clients.get(instanceId);
+				if (existing && existing.ws !== ws) {
+					console.error(`[Bridge] Replacing stale connection for instance ${instanceId}`);
+					try { existing.ws.close(); } catch {/* already closed */}
+					for (const [reqId, pending] of this.pendingRequests) {
+						if (pending.instanceId === instanceId) {
+							clearTimeout(pending.timer);
+							pending.reject(new Error(`Extension reconnected — request aborted (instance: ${instanceId})`));
+							this.pendingRequests.delete(reqId);
+						}
+					}
+				}
+
 				const client: ConnectedClient = {
 					ws,
 					info: {
@@ -179,14 +198,19 @@ export class WebSocketBridge {
 				});
 
 				ws.on('close', () => {
-					console.error(`[Bridge] EDA Pro Extension disconnected (instance: ${instanceId})`);
-					this.clients.delete(instanceId);
-					// Reject pending requests for this instance
-					for (const [id, pending] of this.pendingRequests) {
-						if (pending.instanceId === instanceId) {
-							clearTimeout(pending.timer);
-							pending.reject(new Error(`EDA Pro Extension disconnected (instance: ${instanceId})`));
-							this.pendingRequests.delete(id);
+					// Only clear the client entry if THIS ws is still the active
+					// one. A stale socket closing after replacement should not
+					// erase the fresh connection.
+					const current = this.clients.get(instanceId);
+					if (current && current.ws === ws) {
+						console.error(`[Bridge] EDA Pro Extension disconnected (instance: ${instanceId})`);
+						this.clients.delete(instanceId);
+						for (const [id, pending] of this.pendingRequests) {
+							if (pending.instanceId === instanceId) {
+								clearTimeout(pending.timer);
+								pending.reject(new Error(`EDA Pro Extension disconnected (instance: ${instanceId})`));
+								this.pendingRequests.delete(id);
+							}
 						}
 					}
 				});
@@ -298,31 +322,33 @@ export class WebSocketBridge {
 	 * If only one instance is connected, auto-selects it.
 	 */
 	async send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-		const { instance_id, ...forwardParams } = params;
+		const { instance_id, _timeoutMs, ...forwardParams } = params;
 		const client = this.resolveClient(instance_id as string | undefined);
-		return this.sendToClient(client, method, forwardParams);
+		const timeoutMs = typeof _timeoutMs === 'number' && _timeoutMs > 0 ? _timeoutMs : undefined;
+		return this.sendToClient(client, method, forwardParams, timeoutMs);
 	}
 
 	/**
 	 * Send to a specific instance by ID (for internal use like requestInstanceInfo).
 	 */
-	private async sendToInstance(instanceId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+	private async sendToInstance(instanceId: string, method: string, params: Record<string, unknown> = {}, timeoutOverride?: number): Promise<unknown> {
 		const client = this.clients.get(instanceId);
 		if (!client || client.ws.readyState !== WebSocket.OPEN) {
 			throw new Error(`Instance "${instanceId}" is not connected`);
 		}
-		return this.sendToClient(client, method, params);
+		return this.sendToClient(client, method, params, timeoutOverride);
 	}
 
-	private async sendToClient(client: ConnectedClient, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+	private async sendToClient(client: ConnectedClient, method: string, params: Record<string, unknown> = {}, timeoutOverride?: number): Promise<unknown> {
 		const id = String(++this.requestIdCounter);
 		const request: BridgeRequest = { id, method, params };
+		const timeout = timeoutOverride ?? this.timeout;
 
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pendingRequests.delete(id);
-				reject(new Error(`Request timed out after ${this.timeout}ms: ${method}`));
-			}, this.timeout);
+				reject(new Error(`Request timed out after ${timeout}ms: ${method} (override with _timeoutMs)`));
+			}, timeout);
 
 			this.pendingRequests.set(id, { resolve, reject, timer, instanceId: client.info.instanceId });
 			client.ws.send(JSON.stringify(request));

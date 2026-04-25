@@ -1,5 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { spawn } from 'child_process';
+import { mkdtemp, writeFile, readFile, access } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
 import type { WebSocketBridge } from '../bridge';
 import { withDocumentParam } from './query-params';
 
@@ -51,6 +55,22 @@ Use fileType for sub-formats: "xlsx"/"csv" (bom, pick_and_place), "step"/"obj" (
 	);
 
 	server.tool(
+		'pcb_autoroute',
+		`Run FreeRouting on the active PCB and import the result. Pipeline: pcb_export(dsn) → java -jar freerouting.jar → pcb_import(autoroute_ses). Requires:
+  - Java 11+ on PATH (or set JAVA_BIN env var)
+  - FreeRouting jar at vendor/freerouting.jar (or set FREEROUTING_JAR env var)
+Download the latest jar from https://github.com/freerouting/freerouting/releases. Returns the SES filename, byte size, and FreeRouting stdout/stderr tail. Locked tracks are preserved (passes -mp 100 -us global).`,
+		withDocumentParam({
+			passes: z.number().int().positive().optional().default(100).describe('Optimization passes (default 100)'),
+			timeoutSeconds: z.number().int().positive().optional().default(600).describe('Kill the Java process after this many seconds'),
+		}),
+		async ({ passes, timeoutSeconds, ...rest }) => {
+			const result = await runAutoroute(bridge, { passes: passes ?? 100, timeoutSeconds: timeoutSeconds ?? 600 }, rest);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
 		'pcb_import',
 		`Import routing or layout result files into the PCB (Base64-encoded).
 Formats: autoroute_json (JSON autoroute), autolayout_json (JSON autolayout), autoroute_ses (FreeRouting SES).`,
@@ -66,4 +86,120 @@ Formats: autoroute_json (JSON autoroute), autolayout_json (JSON autolayout), aut
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
+}
+
+interface AutorouteOptions {
+	passes: number;
+	timeoutSeconds: number;
+}
+
+async function runAutoroute(
+	bridge: WebSocketBridge,
+	opts: AutorouteOptions,
+	routingParams: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+	const javaBin = process.env.JAVA_BIN || 'java';
+	const jarPath = process.env.FREEROUTING_JAR || resolve(process.cwd(), 'vendor/freerouting.jar');
+
+	// Verify the jar exists before we spend time exporting DSN.
+	try {
+		await access(jarPath);
+	} catch {
+		throw new Error(
+			`FreeRouting jar not found at ${jarPath}. Download a release from ` +
+			`https://github.com/freerouting/freerouting/releases and either drop it at ` +
+			`vendor/freerouting.jar or set FREEROUTING_JAR to its absolute path.`,
+		);
+	}
+
+	// 1. Export DSN from EasyEDA.
+	const dsnResult = (await bridge.send('pcb.manufacture.getDsnFile', {
+		...routingParams,
+		fileName: 'autoroute',
+	})) as { fileName: string; data: string; size: number };
+
+	if (!dsnResult?.data) throw new Error('DSN export returned no data — is a PCB document open?');
+
+	// 2. Stage DSN to a temp dir, run FreeRouting.
+	const dir = await mkdtemp(join(tmpdir(), 'easyeda-autoroute-'));
+	const dsnFile = join(dir, dsnResult.fileName || 'autoroute.dsn');
+	const sesFile = dsnFile.replace(/\.dsn$/i, '.ses');
+	await writeFile(dsnFile, Buffer.from(dsnResult.data, 'base64'));
+
+	const args = [
+		'-jar', jarPath,
+		'-de', dsnFile,
+		'-do', sesFile,
+		'-mp', String(opts.passes),
+		'-us', 'global',
+	];
+	const javaResult = await runJava(javaBin, args, opts.timeoutSeconds * 1000);
+
+	// 3. Read SES, ship it back through the import path.
+	let sesBytes: Buffer;
+	try {
+		sesBytes = await readFile(sesFile);
+	} catch {
+		throw new Error(
+			`FreeRouting did not produce a SES file at ${sesFile}. Java exited with code ${javaResult.code}.\n` +
+			`stderr tail:\n${javaResult.stderrTail}`,
+		);
+	}
+
+	await bridge.send('pcb.manufacture.importAutoRouteSes', {
+		...routingParams,
+		fileName: dsnResult.fileName?.replace(/\.dsn$/i, '.ses') || 'autoroute.ses',
+		data: sesBytes.toString('base64'),
+	});
+
+	return {
+		dsnSize: dsnResult.size,
+		sesSize: sesBytes.length,
+		javaExitCode: javaResult.code,
+		passes: opts.passes,
+		stdoutTail: javaResult.stdoutTail,
+		stderrTail: javaResult.stderrTail,
+		workDir: dir,
+	};
+}
+
+interface JavaResult {
+	code: number;
+	stdoutTail: string;
+	stderrTail: string;
+}
+
+function runJava(javaBin: string, args: string[], timeoutMs: number): Promise<JavaResult> {
+	return new Promise((resolveProm, rejectProm) => {
+		const proc = spawn(javaBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+		let stdout = '';
+		let stderr = '';
+		const TAIL = 4000;
+
+		const killer = setTimeout(() => {
+			try { proc.kill('SIGKILL'); } catch {/* */}
+			rejectProm(new Error(`FreeRouting timed out after ${timeoutMs}ms — increase timeoutSeconds.`));
+		}, timeoutMs);
+
+		proc.stdout.on('data', (d) => {
+			stdout += d.toString();
+			if (stdout.length > TAIL * 2) stdout = stdout.slice(-TAIL);
+		});
+		proc.stderr.on('data', (d) => {
+			stderr += d.toString();
+			if (stderr.length > TAIL * 2) stderr = stderr.slice(-TAIL);
+		});
+		proc.on('error', (err) => {
+			clearTimeout(killer);
+			rejectProm(new Error(`Failed to spawn Java (${javaBin}): ${err.message}. Is Java installed and on PATH?`));
+		});
+		proc.on('close', (code) => {
+			clearTimeout(killer);
+			resolveProm({
+				code: code ?? -1,
+				stdoutTail: stdout.slice(-TAIL),
+				stderrTail: stderr.slice(-TAIL),
+			});
+		});
+	});
 }

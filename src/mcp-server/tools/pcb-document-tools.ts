@@ -30,6 +30,38 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 	);
 
+	server.tool(
+		'pcb_refresh_canvas',
+		'Force a canvas redraw by cycling the ratline calculator and re-zooming. Use when newly created tracks/vias do not visually appear despite being present in API queries — common after batch routing.',
+		{
+			zoom: z.boolean().optional().default(true).describe('Also zoom-to-board (default: true)'),
+		},
+		async ({ zoom }) => {
+			const result = await bridge.send('pcb.document.refresh', { zoom });
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_get_layer_status',
+		'Get every layer with its visibility (layerStatus: 0=NOTUSED, 1=SHOW, 2=HIDDEN), lock state, and transparency. Pair with pcb_get_canvas_filter when tracks/vias appear missing in the editor.',
+		{},
+		async () => {
+			const result = await bridge.send('pcb.layer.getStatus');
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_get_canvas_filter',
+		'Get the current canvas filter — reveals if Track, Via, Pad, or other primitive types have been hidden in the UI. Useful for diagnosing "I created tracks but cannot see them" cases.',
+		{},
+		async () => {
+			const result = await bridge.send('pcb.document.getCanvasFilter');
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
 	// === Primitive Query ===
 
 	server.tool(

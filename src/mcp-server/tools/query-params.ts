@@ -13,6 +13,14 @@ export const instanceParam = {
 		.describe(
 			'Target EasyEDA instance ID (8-char hex). Required when multiple instances are connected. Omit when only one instance is connected (auto-selected). Use list_instances to see connected instances.',
 		),
+	_timeoutMs: z
+		.number()
+		.int()
+		.positive()
+		.optional()
+		.describe(
+			'Override the bridge request timeout for this call (ms). Default 45000. Bump for slow operations like pcb_export autoroute_json or pcb_autoroute (e.g. 300000 for 5 min). Also settable globally via EDA_WS_TIMEOUT_MS env.',
+		),
 };
 
 /**
@@ -57,6 +65,12 @@ export const queryParams = {
 		.positive()
 		.optional()
 		.describe('Truncate result array to at most N items'),
+	compact: z
+		.boolean()
+		.optional()
+		.describe(
+			'Strip noisy fields and keep only identity + key geometry (primitiveId, net, layer, x, y, designator, padNumber, lineWidth, holeDiameter, diameter). Use whenever you only need IDs or quick verification — drops 80–95% of bytes.',
+		),
 };
 
 /** Spread into a tool's params object to add query param support (includes required document). */

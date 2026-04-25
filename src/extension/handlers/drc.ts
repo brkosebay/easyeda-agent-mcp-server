@@ -5,6 +5,48 @@ export const drcHandlers: Record<string, (params: Record<string, any>) => Promis
 		return eda.pcb_Drc.check(params.strict, params.ui, params.verbose);
 	},
 
+	// Run DRC, then group violations by category/net/component and surface
+	// the top-N. Categories use whatever the runtime DRC payload provides;
+	// we do best-effort field discovery so this stays robust as EasyEDA
+	// evolves the API.
+	'pcb.drc.summarize': async (params) => {
+		const result = await eda.pcb_Drc.check(true, false, true);
+		const violations = Array.isArray(result) ? result : [];
+
+		const top = Number(params?.top) > 0 ? Number(params.top) : 25;
+		const groupBy: 'category' | 'net' | 'component' = params?.groupBy || 'category';
+
+		type Counter = Map<string, { count: number; sample: any; ids: string[] }>;
+		const counters: Counter = new Map();
+
+		for (const v of violations) {
+			const key = pickGroupKey(v, groupBy);
+			const entry = counters.get(key) || { count: 0, sample: v, ids: [] };
+			entry.count += 1;
+			if (entry.ids.length < 5) {
+				const id = v?.primitiveId || v?.id || v?.itemId;
+				if (id) entry.ids.push(String(id));
+			}
+			counters.set(key, entry);
+		}
+
+		const groups = Array.from(counters.entries())
+			.map(([key, data]) => ({
+				key,
+				count: data.count,
+				sampleMessage: data.sample?.message || data.sample?.errorMessage || data.sample?.description,
+				samplePrimitiveIds: data.ids,
+			}))
+			.sort((a, b) => b.count - a.count)
+			.slice(0, top);
+
+		return {
+			totalViolations: violations.length,
+			groupBy,
+			topGroups: groups,
+		};
+	},
+
 	// === Rule Configuration ===
 
 	'pcb.drc.getCurrentRuleConfigName': async () => {
@@ -165,3 +207,18 @@ export const drcHandlers: Record<string, (params: Record<string, any>) => Promis
 		return eda.pcb_Drc.modifyPadPairGroupName(params.originalName, params.newName);
 	},
 };
+
+function pickGroupKey(v: any, groupBy: 'category' | 'net' | 'component'): string {
+	if (!v || typeof v !== 'object') return 'unknown';
+	switch (groupBy) {
+		case 'net':
+			return String(v.net || v.netName || v.net1 || 'unknown-net');
+		case 'component':
+			return String(v.component || v.designator || v.refDes || 'unknown-component');
+		case 'category':
+		default:
+			return String(
+				v.category || v.ruleType || v.rule || v.errorType || v.type || 'unknown',
+			);
+	}
+}

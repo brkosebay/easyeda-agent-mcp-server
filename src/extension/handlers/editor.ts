@@ -16,15 +16,23 @@ function stripBloat(obj: any): any {
 	return obj;
 }
 
-// Screenshot/image capture is NOT implemented. As of 2026-03-15, all three
-// candidate EasyEDA Pro APIs fail in the web app:
-//   - sch_ManufactureData.getExportDocumentFile() — hangs forever (never resolves),
-//     regardless of file type (PNG/SVG/PDF) or parameters. The function exists and
-//     is callable, but the returned Promise never settles.
-//   - pcb_ManufactureData.getPdfFile() — same behavior (never resolves).
-//   - dmt_EditorControl.getCurrentRenderedAreaImage() — returns undefined immediately.
-// These APIs may work in the desktop Electron app but not the web version.
-// Reported to EasyEDA Pro engineering (Haidy @ LCSC/JLCPCB).
+// Screenshot caveat: as of 2026-03-15 all three candidate EasyEDA Pro
+// screenshot APIs return undefined / hang in the web app. They MAY work on
+// desktop Electron. The handler below tries getCurrentRenderedAreaImage
+// (the simplest path) and returns a structured error if it fails so callers
+// know it's a runtime limitation, not a tool bug.
+
+async function blobToBase64(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const dataUrl = reader.result as string;
+			resolve(dataUrl.split(',')[1] || '');
+		};
+		reader.onerror = () => reject(new Error('Failed to read blob'));
+		reader.readAsDataURL(blob);
+	});
+}
 
 export const editorHandlers: Record<string, (params: Record<string, any>) => Promise<any>> = {
 	'editor.project.getStructure': async () => {
@@ -68,6 +76,53 @@ export const editorHandlers: Record<string, (params: Record<string, any>) => Pro
 
 	'editor.openDocument': async (params) => {
 		return eda.dmt_EditorControl.openDocument(params.documentUuid);
+	},
+
+	// Screenshot the current canvas rendered area. Works on desktop Electron
+	// (returns Blob); typically returns undefined on the EasyEDA web app.
+	'editor.screenshot': async (params) => {
+		const blob = await eda.dmt_EditorControl.getCurrentRenderedAreaImage(params?.tabId);
+		if (!blob) {
+			throw new Error(
+				'Screenshot returned undefined. EasyEDA Pro web app does not currently expose canvas screenshots; ' +
+				'this typically works only on the desktop Electron build. (Reported to EasyEDA engineering.)',
+			);
+		}
+		const base64 = await blobToBase64(blob);
+		return {
+			mimeType: blob.type || 'image/png',
+			size: blob.size,
+			base64,
+		};
+	},
+
+	// Canvas viewport control — pan/zoom that the agent can trigger.
+	'editor.zoomToRegion': async (params) => {
+		return eda.dmt_EditorControl.zoomToRegion(params.left, params.right, params.top, params.bottom, params.tabId);
+	},
+	'editor.zoomTo': async (params) => {
+		return eda.dmt_EditorControl.zoomTo(params.x, params.y, params.scaleRatio, params.tabId);
+	},
+	'editor.zoomToAllPrimitives': async (params) => {
+		return eda.dmt_EditorControl.zoomToAllPrimitives(params?.tabId);
+	},
+	'editor.zoomToSelected': async (params) => {
+		return eda.dmt_EditorControl.zoomToSelectedPrimitives(params?.tabId);
+	},
+
+	// Visual indicator markers — draw arrows / boxes on the canvas to point
+	// at things the agent wants the user to notice.
+	'editor.addMarkers': async (params) => {
+		return eda.dmt_EditorControl.generateIndicatorMarkers(
+			params.markers,
+			params.color,
+			params.lineWidth,
+			params.zoom,
+			params.tabId,
+		);
+	},
+	'editor.clearMarkers': async (params) => {
+		return eda.dmt_EditorControl.removeIndicatorMarkers(params?.tabId);
 	},
 
 	'editor.getOpenTabs': async () => {

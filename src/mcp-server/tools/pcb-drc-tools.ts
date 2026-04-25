@@ -55,6 +55,44 @@ const PAD_PAIR_HANDLERS: Record<string, string> = {
 
 export function registerPcbDrcTools(server: McpServer, bridge: WebSocketBridge): void {
 	server.tool(
+		'pcb_drc_summarize',
+		'Run DRC and return the top-N violation groups instead of every error. Group by category (default), net, or component. Each group includes count, a sample error message, and up to 5 sample primitive IDs to drill into. Use this before pcb_run_drc when you only need an overview.',
+		withDocumentParam({
+			groupBy: z.enum(['category', 'net', 'component']).optional().default('category').describe('Group axis'),
+			top: z.number().int().positive().optional().default(25).describe('Max groups returned'),
+		}),
+		async (params) => {
+			const result = await bridge.send('pcb.drc.summarize', params);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_repour_all',
+		'Rebuild every copper pour on the PCB. Use after moving components or routing tracks so pour fill stays current. Skips locked pours; can be scoped to a net or layer. Returns rebuilt count plus per-pour failures.',
+		withDocumentParam({
+			net: z.string().optional().describe('Only repour this net'),
+			layer: z.union([z.string(), z.number()]).optional().describe('Only repour pours on this layer'),
+		}),
+		async (params) => {
+			const result = await bridge.send('pcb.pour.repourAll', params);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_connectivity_status',
+		'Per-net connectivity audit. Tags each net as routed (has Line/Via), pour_only (only copper pour links pads), unrouted (multi-pad net with no copper), or single_pad (often power probes / NC). Returns counts plus a per-net detail list sorted with unrouted first.',
+		withDocumentParam({
+			nets: z.array(z.string()).optional().describe('Limit audit to these nets (default: all nets)'),
+		}),
+		async (params) => {
+			const result = await bridge.send('pcb.net.connectivityStatus', params);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
 		'pcb_manage_rule_config',
 		`Manage DRC rule configurations. Actions:
 - get_current_name: get current active config name

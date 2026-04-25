@@ -28,56 +28,41 @@ const GET_BY_ID_HANDLER_MAP: Record<string, string> = {
 };
 
 const PRIMITIVE_TYPES = [
-	'component',
-	'track',
-	'polyline',
-	'via',
-	'pad',
-	'pour',
-	'fill',
-	'arc',
-	'region',
+	'component', 'track', 'polyline', 'via', 'pad', 'pour', 'fill', 'arc', 'region',
 ] as const;
 
 export function registerReadTools(server: McpServer, bridge: WebSocketBridge): void {
 	server.tool(
 		'pcb_get_all_primitives',
-		`Get all primitives of a specific type on the PCB, with optional filters.
-Filters by type: component(layer), track/polyline/arc(net,layer), via(net), pad(layer,net), pour/fill(layer,net), region(layer).
-Component fields: primitiveId, designator, name, layer, x, y, rotation, primitiveLock, addIntoBom.
-Track fields: primitiveId, net, layer, startX, startY, endX, endY, lineWidth.
-Via fields: primitiveId, net, x, y, holeDiameter, diameter, viaType.
-Pad fields: primitiveId, net, layer, padNumber, x, y.`,
+		'List PCB primitives by type with optional net/layer filters. Compact by default — pass compact:false for full geometry. See pcb_help("primitives") for field reference.',
 		withQueryParams({
-			type: z.enum(PRIMITIVE_TYPES).describe('Primitive type to query'),
-			net: z.string().optional().describe('Filter by net name'),
-			layer: z.string().optional().describe('Filter by layer (e.g. "TopLayer", "BottomLayer")'),
-			primitiveLock: z.boolean().optional().describe('Filter by lock status (true=locked only, false=unlocked only)'),
+			type: z.enum(PRIMITIVE_TYPES).describe('Primitive type'),
+			net: z.string().optional().describe('Filter by net'),
+			layer: z.union([z.string(), z.number()]).optional().describe('Filter by layer (ID or name)'),
+			primitiveLock: z.boolean().optional().describe('Filter by lock status'),
 		}),
-		async ({ type, ...rest }) => {
-			const result = await bridge.send(GET_ALL_HANDLER_MAP[type], rest);
+		async ({ type, compact, ...rest }) => {
+			const result = await bridge.send(GET_ALL_HANDLER_MAP[type], { ...rest, compact: compact ?? true });
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
 
 	server.tool(
 		'pcb_get_primitives_by_id',
-		'Get one or more PCB primitives by their type and primitive ID(s)',
+		'Look up primitives by ID. Compact by default; set compact:false for full geometry.',
 		withQueryParams({
 			type: z.enum(PRIMITIVE_TYPES).describe('Primitive type'),
-			primitiveIds: z
-				.union([z.string(), z.array(z.string())])
-				.describe('Single primitive ID or array of IDs'),
+			primitiveIds: z.union([z.string(), z.array(z.string())]).describe('ID or array of IDs'),
 		}),
-		async ({ type, ...rest }) => {
-			const result = await bridge.send(GET_BY_ID_HANDLER_MAP[type], rest);
+		async ({ type, compact, ...rest }) => {
+			const result = await bridge.send(GET_BY_ID_HANDLER_MAP[type], { ...rest, compact: compact ?? true });
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
 
 	server.tool(
 		'pcb_get_all_nets',
-		'Get all net names in the PCB design',
+		'List all net names on the PCB.',
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.net.getAllNames', params);
@@ -87,26 +72,21 @@ Pad fields: primitiveId, net, layer, padNumber, x, y.`,
 
 	server.tool(
 		'pcb_get_net_primitives',
-		'Get all primitives (tracks, pads, vias, etc.) belonging to a specific net',
+		'Get primitives belonging to a net (compact by default).',
 		withQueryParams({
-			net: z.string().describe('The net name to query'),
-			types: z
-				.array(z.string())
-				.optional()
-				.describe('Filter by primitive types (e.g. ["Line", "Via", "Pad"])'),
+			net: z.string().describe('Net name'),
+			types: z.array(z.string()).optional().describe('Primitive types filter (e.g. ["Line","Via","Pad"])'),
 		}),
-		async (params) => {
-			const result = await bridge.send('pcb.net.getPrimitives', params);
+		async ({ compact, ...rest }) => {
+			const result = await bridge.send('pcb.net.getPrimitives', { ...rest, compact: compact ?? true });
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
 
 	server.tool(
 		'pcb_get_net_length',
-		'Get the total routed length of a specific net',
-		withDocumentParam({
-			net: z.string().describe('The net name'),
-		}),
+		'Get total routed length of a net (mil).',
+		withDocumentParam({ net: z.string().describe('Net name') }),
 		async (params) => {
 			const result = await bridge.send('pcb.net.getLength', params);
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -115,7 +95,7 @@ Pad fields: primitiveId, net, layer, padNumber, x, y.`,
 
 	server.tool(
 		'pcb_get_design_rules',
-		'Get the current PCB design rule configuration (clearance, width, etc.)',
+		'Get the active DRC rule configuration.',
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.getRuleConfiguration', params);
@@ -125,7 +105,7 @@ Pad fields: primitiveId, net, layer, padNumber, x, y.`,
 
 	server.tool(
 		'pcb_get_net_rules',
-		'Get net-specific design rules',
+		'Get net-specific DRC rules.',
 		withDocumentParam({}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.getNetRules', params);
@@ -134,25 +114,37 @@ Pad fields: primitiveId, net, layer, padNumber, x, y.`,
 	);
 
 	server.tool(
-		'pcb_get_component_pins',
-		`Get all pins/pads of a specific component by its primitive ID.
-Pin fields: primitiveId, padNumber, net, layer, x, y.`,
-		withQueryParams({
-			primitiveId: z.string().describe('The component primitive ID'),
+		'pcb_get_pad',
+		'Look up a single pad by component reference + pad number. Returns {primitiveId, x, y, layer, net}.',
+		withDocumentParam({
+			reference: z.string().describe('Designator (e.g. "R1", "U2")'),
+			padNumber: z.union([z.string(), z.number()]).describe('Pad number/name'),
 		}),
 		async (params) => {
-			const result = await bridge.send('pcb.component.getPins', params);
+			const result = await bridge.send('pcb.pad.findByRef', params);
+			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_get_component_pins',
+		'List all pads of a component by primitive ID.',
+		withQueryParams({
+			primitiveId: z.string().describe('Component primitive ID'),
+		}),
+		async ({ compact, ...rest }) => {
+			const result = await bridge.send('pcb.component.getPins', { ...rest, compact: compact ?? true });
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
 
 	server.tool(
 		'pcb_run_drc',
-		'Run Design Rule Check (DRC) on the PCB. Returns violations if verbose is true, or just pass/fail.',
+		'Run Design Rule Check. Returns pass/fail or violation array (verbose:true).',
 		withQueryParams({
-			strict: z.boolean().default(true).describe('Whether to run strict DRC checks'),
-			ui: z.boolean().default(false).describe('Whether to show DRC results in UI'),
-			verbose: z.boolean().default(true).describe('If true, returns detailed violation list'),
+			strict: z.boolean().default(true).describe('Strict mode'),
+			ui: z.boolean().default(false).describe('Show DRC panel'),
+			verbose: z.boolean().default(true).describe('Return full violation list'),
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.check', params);
@@ -162,11 +154,60 @@ Pin fields: primitiveId, padNumber, net, layer, x, y.`,
 
 	server.tool(
 		'pcb_get_selected',
-		'Get currently selected primitives in the PCB editor',
+		'Get currently selected primitives in the PCB editor.',
 		withQueryParams({}),
-		async (params) => {
-			const result = await bridge.send('pcb.select.getAll', params);
+		async ({ compact, ...rest }) => {
+			const result = await bridge.send('pcb.select.getAll', { ...rest, compact: compact ?? true });
 			return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 		},
 	);
+
+	server.tool(
+		'pcb_help',
+		'Inline reference for tool conventions. Topics: "polygon" (pour/fill/region shapes), "layer" (layer ID/name table), "viaType" (numeric/string mapping), "compact" (response sizing), "units" (mil vs mm), "primitives" (field reference per type), "timeout" (overriding the 45s default).',
+		{ topic: z.enum(['polygon', 'layer', 'viaType', 'compact', 'units', 'primitives', 'timeout']) },
+		async ({ topic }) => {
+			return { content: [{ type: 'text', text: HELP[topic] }] };
+		},
+	);
 }
+
+const HELP: Record<string, string> = {
+	polygon: `Polygon input accepts four shapes:
+1. {points: [{x,y},{x,y},...]} — friendly, auto-closes the ring
+2. [{x,y},{x,y},...] — same as above without the wrapper
+3. ["L", x1,y1, x2,y2, ..., x1,y1] — native L-mode source array (closed)
+4. ["R", cx, cy, w, h, rotation, cornerRadius] — native rectangle mode
+All coordinates in mil. Pour/fill/region need a copper layer.`,
+	layer: `Layer accepts either a numeric ID or a name string.
+IDs: 1=Top, 2=Bottom, 3=TopSilk, 4=BottomSilk, 5=TopMask, 6=BottomMask,
+7=TopPaste, 8=BottomPaste, 9=TopAssembly, 10=BottomAssembly,
+11=BoardOutline, 12=Multi, 13=Document, 14=Mechanical,
+15..44=Inner1..Inner30, 71..100=Custom1..Custom30.
+Names: "TopLayer", "BottomLayer", "Inner1", "BoardOutline", etc. Case-insensitive.`,
+	viaType: `viaType accepts either a number or string:
+0 / "Through" — through-hole via (default)
+1 / "BlindBuried" — blind/buried via
+2 / "Suture" / "Stitch" — stitching via`,
+	compact: `Read tools default to compact:true — only identity + key geometry fields.
+Pass compact:false to get full data (e.g. complete pour polygon source).
+Pass fields:["a","b"] for explicit field projection.
+Pass filter:{net:"GND"} or filter:{designator:"R*"} for AND-filtering.
+Pass limit:N to truncate.`,
+	units: `All PCB coordinates and lengths are in mil (1 mil = 0.0254 mm) — EasyEDA's internal data unit.
+Use pcb_create_via_mm to create vias with mm-based diameters.
+Schematic coordinates are in 0.01 inch.`,
+	primitives: `Common fields per primitive type (compact mode):
+component: primitiveId, designator, name, layer, x, y, rotation, primitiveLock
+track (Line): primitiveId, net, layer, startX, startY, endX, endY, lineWidth
+polyline: primitiveId, net, layer, lineWidth (also stores point list — verbose only)
+via: primitiveId, net, x, y, holeDiameter, diameter, viaType
+pad: primitiveId, net, layer, padNumber, x, y, rotation
+pour: primitiveId, net, layer, pourName, pourPriority, pourFillMethod
+fill: primitiveId, net, layer, fillMode, lineWidth
+arc: primitiveId, net, layer, startX, startY, endX, endY, arcAngle, lineWidth
+region: primitiveId, layer, ruleType, regionName`,
+	timeout: `Default bridge timeout is 45000ms. Override per-call with _timeoutMs:
+_timeoutMs: 300000  // 5 min, for long exports / autoroute / DRC on big boards
+Set EDA_WS_TIMEOUT_MS env to change the global default.`,
+};

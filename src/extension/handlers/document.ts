@@ -1,8 +1,40 @@
+import { flattenState, flattenStateArray, normalizeLayer } from './_utils';
+
 export const documentHandlers: Record<string, (params: Record<string, any>) => Promise<any>> = {
 	// === Document ===
 
 	'pcb.document.save': async (params) => {
 		return eda.pcb_Document.save(params.uuid);
+	},
+
+	// Force a canvas refresh: cycle the ratline calculator and re-zoom.
+	// Use this when newly created tracks/vias don't visually appear even
+	// though the API reports them as present.
+	'pcb.document.refresh': async (params) => {
+		const ratlineStatus = await eda.pcb_Document.getCalculatingRatlineStatus().catch(() => null);
+		await eda.pcb_Document.stopCalculatingRatline().catch(() => {});
+		await eda.pcb_Document.startCalculatingRatline().catch(() => {});
+		if (params?.zoom !== false) await eda.pcb_Document.zoomToBoardOutline().catch(() => {});
+		return { ratlineStatus };
+	},
+
+	// Inspect canvas filter — reveals when Track/Via/etc display has been
+	// turned off in the UI ("why don't I see my tracks?").
+	'pcb.document.getCanvasFilter': async () => {
+		return eda.pcb_Document.getCurrentFilterConfiguration();
+	},
+
+	// Get layer visibility + lock status in a flat shape.
+	'pcb.layer.getStatus': async () => {
+		const layers = await eda.pcb_Layer.getAllLayers();
+		return (layers || []).map((l: any) => ({
+			id: l.id,
+			name: l.name,
+			type: l.type,
+			layerStatus: l.layerStatus,    // 0=NOTUSED, 1=SHOW, 2=HIDDEN
+			locked: l.locked,
+			transparency: l.transparency,
+		}));
 	},
 
 	'pcb.document.navigateTo': async (params) => {
@@ -64,11 +96,13 @@ export const documentHandlers: Record<string, (params: Record<string, any>) => P
 	// === Pad ===
 
 	'pcb.getAll.pad': async (params) => {
-		return eda.pcb_PrimitivePad.getAll(params.layer, params.net, params.primitiveLock);
+		const all = await eda.pcb_PrimitivePad.getAll(normalizeLayer(params.layer), params.net, params.primitiveLock);
+		return flattenStateArray(all);
 	},
 
 	'pcb.get.pad': async (params) => {
-		return eda.pcb_PrimitivePad.get(params.primitiveIds);
+		const result = await eda.pcb_PrimitivePad.get(params.primitiveIds);
+		return Array.isArray(result) ? flattenStateArray(result) : flattenState(result);
 	},
 
 	'pcb.create.pad': async (params) => {
