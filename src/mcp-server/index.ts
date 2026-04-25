@@ -114,6 +114,20 @@ async function main() {
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 
+	// Capture clientInfo from the MCP `initialize` request once the client
+	// completes the handshake. Surface it on the bridge so the extension
+	// can label "Claude Code chat XYZ" / "Codex chat ABC" connections.
+	const underlying = (server as any).server;
+	if (underlying) {
+		underlying.oninitialized = () => {
+			const info = underlying.getClientVersion?.();
+			if (info && (info.name || info.version)) {
+				bridge.setClientInfo({ name: info.name, version: info.version });
+				console.error(`[MCP] Client connected: ${info.name ?? '(unnamed)'} ${info.version ?? ''}`);
+			}
+		};
+	}
+
 	console.error('[MCP] EasyEDA Agent MCP Server started');
 	console.error(`[MCP] WebSocket Server on port ${bridge.getPort()}, waiting for EDA Pro Extension...`);
 

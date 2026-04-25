@@ -276,11 +276,79 @@
   }
 
   /* Footer */
+  /* Connected agents list */
+  .agents-section {
+    width: 100%;
+    margin-top: 18px;
+    animation: fadeIn 0.4s ease-out 0.22s both;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .agents-section::-webkit-scrollbar {
+    width: 6px;
+  }
+  .agents-section::-webkit-scrollbar-thumb {
+    background: var(--silk-dim);
+    border-radius: 3px;
+    opacity: 0.4;
+  }
+
+  .agent-row {
+    display: flex;
+    align-items: center;
+    background: var(--info-bg);
+    border: 1px solid var(--info-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    gap: 10px;
+  }
+  .agent-row:last-child { margin-bottom: 0; }
+
+  .agent-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 4px rgba(92, 184, 122, 0.5);
+    flex-shrink: 0;
+  }
+
+  .agent-info { flex: 1; min-width: 0; }
+
+  .agent-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--silk);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .agent-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--silk-dim);
+    margin-top: 2px;
+  }
+
+  .agents-empty {
+    background: var(--info-bg);
+    border: 1px dashed var(--info-border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--silk-dim);
+  }
+
   .footer {
-    margin-top: auto;
-    padding-top: 16px;
+    margin-top: 16px;
+    padding-top: 12px;
     text-align: center;
     animation: fadeIn 0.4s ease-out 0.25s both;
+    flex-shrink: 0;
   }
 
   .footer-text {
@@ -346,16 +414,67 @@
     </div>
   </div>
 
+  <div class="agents-section">
+    <div class="chip-label" style="margin-top: 0; margin-bottom: 8px;">Connected agents</div>
+    <div id="agentsList"></div>
+  </div>
+
   <div class="footer">
     <div class="footer-text">Built for EasyEDA Pro</div>
   </div>
 </div>
 
 <script>
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
+  function formatAgentName(client) {
+    if (!client || !client.name) return 'Unidentified MCP client';
+    var n = String(client.name).toLowerCase();
+    // Pretty-print known clients.
+    if (n.indexOf('claude-code') !== -1) return 'Claude Code';
+    if (n.indexOf('claude') !== -1 && n.indexOf('codex') === -1) return 'Claude';
+    if (n.indexOf('codex') !== -1) return 'Codex';
+    if (n.indexOf('cursor') !== -1) return 'Cursor';
+    if (n.indexOf('cline') !== -1) return 'Cline';
+    if (n.indexOf('continue') !== -1) return 'Continue';
+    return client.name;
+  }
+
+  function renderAgents(servers) {
+    var list = document.getElementById('agentsList');
+    list.innerHTML = '';
+    if (!servers || servers.length === 0) {
+      list.innerHTML = '<div class="agents-empty">No agents connected. Open a Claude / Codex chat with the easyeda-agent MCP configured.</div>';
+      return;
+    }
+    // Most-recent first.
+    var sorted = servers.slice().sort(function(a, b) { return (b.connectedAt || 0) - (a.connectedAt || 0); });
+    for (var i = 0; i < sorted.length; i++) {
+      var s = sorted[i];
+      var ci = s.clientInfo || {};
+      var name = formatAgentName(ci);
+      var version = ci.version ? ' ' + ci.version : '';
+      var meta = 'port ' + s.port + ' · agent ' + (s.agentId || '?').slice(0, 8);
+      if (ci.pid) meta += ' · pid ' + ci.pid;
+      var row = document.createElement('div');
+      row.className = 'agent-row';
+      row.innerHTML =
+        '<span class="agent-dot"></span>' +
+        '<div class="agent-info">' +
+          '<div class="agent-name">' + escapeHtml(name) + escapeHtml(version) + '</div>' +
+          '<div class="agent-meta">' + escapeHtml(meta) + '</div>' +
+        '</div>';
+      list.appendChild(row);
+    }
+  }
+
   function applyData(data) {
     if (!data) return;
 
-    // Apply theme
     if (data.theme === 'dark') {
       document.documentElement.classList.add('dark');
     }
@@ -363,7 +482,7 @@
     document.getElementById('instanceId').textContent = data.instanceId || '--------';
     document.getElementById('version').textContent = data.version || '--';
 
-    var count = data.connectedPorts || 0;
+    var count = (data.connectedServers && data.connectedServers.length) || data.connectedPorts || 0;
     var dot = document.getElementById('statusDot');
     var text = document.getElementById('statusText');
     if (count > 0) {
@@ -373,6 +492,8 @@
       dot.className = 'status-dot disconnected';
       text.textContent = 'Not connected';
     }
+
+    renderAgents(data.connectedServers);
   }
 
   // Read data from parent window (set by extension before opening iframe)

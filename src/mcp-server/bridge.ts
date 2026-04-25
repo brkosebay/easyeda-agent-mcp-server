@@ -49,6 +49,13 @@ interface PendingRequest {
 	instanceId: string;
 }
 
+export interface ClientInfo {
+	name?: string;
+	version?: string;
+	pid?: number;
+	startedAt?: number;
+}
+
 export class WebSocketBridge {
 	private wss: WebSocketServer | null = null;
 	private clients = new Map<string, ConnectedClient>();
@@ -56,14 +63,40 @@ export class WebSocketBridge {
 	private requestIdCounter = 0;
 	private readonly timeout: number;
 	readonly agentId: string;
+	private clientInfo: ClientInfo;
 
 	constructor(private readonly port: number = 15168, timeout?: number) {
-		// Default 120s; can be overridden via EDA_WS_TIMEOUT_MS env (whole-number ms).
-		// 120s covers repour-all on dense boards, DSN/SES roundtrips, and big DRC
-		// runs without the agent having to hand-tune _timeoutMs per call.
 		const envTimeout = Number(process.env.EDA_WS_TIMEOUT_MS);
 		this.timeout = timeout ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 120_000);
 		this.agentId = randomBytes(8).toString('hex');
+		this.clientInfo = { pid: process.pid, startedAt: Date.now() };
+	}
+
+	/**
+	 * Update the description of the MCP client this bridge serves (set
+	 * after MCP `initialize` resolves). Broadcasts an updated serverInfo
+	 * to every connected EasyEDA extension.
+	 */
+	setClientInfo(info: { name?: string; version?: string }): void {
+		this.clientInfo = { ...this.clientInfo, name: info.name, version: info.version };
+		this.broadcastServerInfo();
+	}
+
+	getClientInfo(): ClientInfo {
+		return { ...this.clientInfo };
+	}
+
+	private broadcastServerInfo(): void {
+		const payload = JSON.stringify({
+			type: 'serverInfo',
+			agentId: this.agentId,
+			clientInfo: this.clientInfo,
+			port: this.port,
+		});
+		for (const [, client] of this.clients) {
+			if (client.ws.readyState !== WebSocket.OPEN) continue;
+			try { client.ws.send(payload); } catch {/* */}
+		}
 	}
 
 	getPort(): number {
@@ -221,8 +254,14 @@ export class WebSocketBridge {
 					console.error(`[Bridge] Client error (instance: ${instanceId}):`, err);
 				});
 
-				// Send agentId to the extension so it can deduplicate connections
-				ws.send(JSON.stringify({ type: 'hello', agentId: this.agentId }));
+				// Send agentId + clientInfo so the extension can label this
+				// connection ("Claude Code chat XYZ" vs "Codex chat ABC" etc.).
+				ws.send(JSON.stringify({
+					type: 'hello',
+					agentId: this.agentId,
+					clientInfo: this.clientInfo,
+					port: this.port,
+				}));
 
 				// Request instance info from the newly connected extension
 				this.requestInstanceInfo(instanceId).catch((err) => {

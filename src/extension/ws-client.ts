@@ -118,10 +118,23 @@ function applyQueryParams(result: any, qp: QueryParams): any {
 // calls; the extension processes them concurrently for reads and serializes
 // writes per-document via the lock manager (see runHandler below).
 
+interface ClientInfo {
+	name?: string;
+	version?: string;
+	pid?: number;
+	startedAt?: number;
+}
+
 interface ServerEntry {
+	port: number;
 	agentId: string;
 	connectedAt: number;
-	greeted: boolean; // true once we've received a `hello`
+	greeted: boolean;
+	clientInfo?: ClientInfo;
+}
+
+export function getConnectedServers(): ServerEntry[] {
+	return Array.from(servers.values()).map((s) => ({ ...s }));
 }
 
 const SERVERS_KEY = '__claude_mcp_servers__';
@@ -317,7 +330,17 @@ function handleMessage(extensionUuid: string, port: number, event: MessageEvent<
 		if (request.type === 'pong') return;
 
 		if (request.type === 'hello') {
-			handleHello(extensionUuid, port, request.agentId || '');
+			handleHello(extensionUuid, port, request.agentId || '', request.clientInfo);
+			return;
+		}
+
+		if (request.type === 'serverInfo') {
+			// Bridge sent updated client info after MCP initialize handshake.
+			const entry = servers.get(port);
+			if (entry) {
+				entry.clientInfo = request.clientInfo;
+				if (request.agentId) entry.agentId = request.agentId;
+			}
 			return;
 		}
 
@@ -400,7 +423,7 @@ async function pushInstanceInfoToAll(extensionUuid: string): Promise<void> {
 
 // === Connection lifecycle ================================================
 
-function handleHello(extensionUuid: string, port: number, agentId: string): void {
+function handleHello(extensionUuid: string, port: number, agentId: string, clientInfo?: ClientInfo): void {
 	const probeTimer = probes.get(port);
 	if (probeTimer != null) {
 		clearTimeout(probeTimer);
@@ -411,11 +434,12 @@ function handleHello(extensionUuid: string, port: number, agentId: string): void
 	if (existing) {
 		existing.agentId = agentId;
 		existing.greeted = true;
+		if (clientInfo) existing.clientInfo = clientInfo;
 		return;
 	}
 
-	servers.set(port, { agentId, connectedAt: Date.now(), greeted: true });
-	queueConnectionToast(port);
+	servers.set(port, { port, agentId, connectedAt: Date.now(), greeted: true, clientInfo });
+	queueConnectionToast(port, clientInfo);
 	setTimeout(() => pushInstanceInfoToAll(extensionUuid), 200);
 }
 
@@ -438,23 +462,32 @@ function dropConnection(extensionUuid: string, port: number): void {
 }
 
 // Toast batcher — multiple ports connecting in the same scan window
-// produce ONE toast.
-let pendingConnectPorts: number[] = [];
+// produce ONE toast that names each client when known.
+interface PendingConn { port: number; client?: ClientInfo }
+let pendingConnects: PendingConn[] = [];
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-function queueConnectionToast(port: number): void {
-	pendingConnectPorts.push(port);
+function queueConnectionToast(port: number, client?: ClientInfo): void {
+	pendingConnects.push({ port, client });
 	if (toastTimer) clearTimeout(toastTimer);
 	toastTimer = setTimeout(() => {
-		const ports = pendingConnectPorts;
-		pendingConnectPorts = [];
+		const conns = pendingConnects;
+		pendingConnects = [];
 		toastTimer = null;
-		if (ports.length === 1) {
-			showSuccess(`Connected to Claude MCP Server on port ${ports[0]}`);
-		} else if (ports.length > 1) {
-			showSuccess(`Connected to ${ports.length} Claude MCP Servers (ports ${ports.join(', ')})`);
+		const labels = conns.map((c) => labelFor(c));
+		if (labels.length === 1) {
+			showSuccess(`Connected to ${labels[0]}`);
+		} else if (labels.length > 1) {
+			showSuccess(`Connected to ${labels.length} agents — ${labels.join(', ')}`);
 		}
 	}, 600);
+}
+
+function labelFor(c: { port: number; client?: ClientInfo }): string {
+	if (c.client?.name) {
+		return c.client.version ? `${c.client.name} ${c.client.version} (port ${c.port})` : `${c.client.name} (port ${c.port})`;
+	}
+	return `Claude MCP Server on port ${c.port}`;
 }
 
 // === WS open / close primitives =========================================

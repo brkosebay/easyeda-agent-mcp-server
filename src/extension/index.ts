@@ -1,5 +1,5 @@
 import * as extensionConfig from '../../extension.json';
-import { connectToMcpServers, disconnectFromAllMcpServers, getConnectedPortCount, getInstanceId, startLiveMode, stopLiveMode, isLiveModeActive } from './ws-client';
+import { connectToMcpServers, disconnectFromAllMcpServers, getConnectedPortCount, getConnectedServers, getInstanceId, startLiveMode, stopLiveMode, isLiveModeActive } from './ws-client';
 
 const AUTO_CONNECT_KEY = 'autoConnect';
 
@@ -80,10 +80,12 @@ export async function about(): Promise<void> {
 		instanceId: getInstanceId(),
 		version: extensionConfig.version,
 		connectedPorts: getConnectedPortCount(),
+		connectedServers: getConnectedServers(),
 		theme,
 	};
 
-	eda.sys_IFrame.openIFrame('pages/about.html', 380, 370, 'claude-about', {
+	// Taller iframe so the connected-agents list has room to breathe.
+	eda.sys_IFrame.openIFrame('pages/about.html', 420, 520, 'claude-about', {
 		title: 'About EasyEDA Agent',
 		grayscaleMask: true,
 	});
