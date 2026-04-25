@@ -4,3 +4,7 @@ release/
 .DS_Store
 *.eext
 .mcp.json
+
+# Internal worktree metadata + planning scratchpads
+.claude/
+IMPROVEMENT_PLAN.md
