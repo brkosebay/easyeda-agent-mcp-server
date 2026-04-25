@@ -6,6 +6,25 @@ This server bridges Claude (or any MCP client) to the EasyEDA Pro extension runn
 Claude  ──MCP stdio──▶  mcp-server  ──WebSocket──▶  EasyEDA extension  ──▶  eda.* APIs
 ```
 
+## Modes: static vs dynamic toolsets
+
+The MCP server can present its catalog two ways:
+
+- **Static** (default): every tool is registered individually. The agent sees ~108 tools in its system prompt. Maximum compatibility — works with every MCP client.
+- **Dynamic** (`EDA_DYNAMIC_TOOLSETS=1`): the agent sees only **3 meta-tools** — `search_tools`, `describe_tools`, `execute_tool`. The 100+ concrete tools live in a server-side catalog; the agent discovers them on demand via local-embedding semantic search. Saves ~95% of system-prompt tokens at the cost of ~2 extra tool calls per task.
+
+To enable dynamic mode, set `EDA_DYNAMIC_TOOLSETS=1` in the MCP server's environment. The first `search_tools` call takes ~2 s while the MiniLM model loads; subsequent calls are sub-200 ms (vectors cached at `.cache/tool-embeddings.json`).
+
+### Dynamic-mode workflow
+
+```
+1. search_tools({query: "create a track"}) → ranked tool names + briefs
+2. describe_tools({names: ["pcb_create_track"]}) → JSON-schema parameters
+3. execute_tool({name: "pcb_create_track", args: {...}}) → same shape as static
+```
+
+Optional: `search_tools({tags: ["pcb","write"]})` for tag-only filtering, or pass both `query` and `tags`.
+
 ## Setup
 
 1. Build: `npm run build` — produces `dist/` and a packaged extension archive.

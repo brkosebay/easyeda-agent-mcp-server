@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { WebSocketBridge } from './bridge';
+import { catalog } from './catalog';
 import { registerReadTools } from './tools/read-tools';
 import { registerWriteTools } from './tools/write-tools';
 import { registerAnalysisTools } from './tools/analysis-tools';
@@ -16,6 +17,7 @@ import { registerSchAnalysisTools } from './tools/sch-analysis-tools';
 
 const PORT_RANGE_START = Number(process.env.EDA_WS_PORT) || 15168;
 const PORT_RANGE_SIZE = Number(process.env.EDA_WS_PORT_RANGE) || 40;
+const DYNAMIC_TOOLSETS = process.env.EDA_DYNAMIC_TOOLSETS === '1';
 
 async function main() {
 	const bridge = await WebSocketBridge.startOnAvailablePort(PORT_RANGE_START, PORT_RANGE_SIZE);
@@ -26,17 +28,27 @@ async function main() {
 			version: '1.0.0',
 		},
 		{
-			instructions: [
-				'This server provides direct access to schematic and PCB designs in EasyEDA Pro.',
-				'When the user asks about their circuit designs, schematics, PCB layouts, components, footprints, or netlist connections, check this server in addition to (or instead of) searching the filesystem for design files.',
-				'Start with `server_info` to check connectivity, then use `editor_get_open_tabs` or `project_get_structure` to discover what designs are available.',
-			].join(' '),
+			instructions: DYNAMIC_TOOLSETS
+				? [
+					'This server exposes EasyEDA Pro through three meta-tools to keep the tool catalog out of context.',
+					'1. Call search_tools(query, tags?) to discover relevant tools by intent or tag filter.',
+					'2. Call describe_tools(names) to fetch argument schemas for the candidates you picked.',
+					'3. Call execute_tool(name, args) to run a tool. Same return shape as the static surface.',
+					'Always call wait_for_extension first if you spawned this MCP server fresh.',
+				].join(' ')
+				: [
+					'This server provides direct access to schematic and PCB designs in EasyEDA Pro.',
+					'When the user asks about their circuit designs, schematics, PCB layouts, components, footprints, or netlist connections, check this server in addition to (or instead of) searching the filesystem for design files.',
+					'Start with `server_info` to check connectivity, then use `editor_get_open_tabs` or `project_get_structure` to discover what designs are available.',
+				].join(' '),
 		},
 	);
 
+	// `server_info` and `list_instances` always stay on the static surface —
+	// the agent needs them to bootstrap discovery in either mode.
 	server.tool(
 		'server_info',
-		'Get MCP server status: WebSocket port, connection state, connected instances, and allowed origins',
+		'MCP server status: WebSocket port, connection state, connected instances, allowed origins.',
 		{},
 		async () => {
 			const instances = bridge.getConnectedInstances();
@@ -53,6 +65,8 @@ async function main() {
 							currentDocument: info.currentDocument,
 							documentType: info.documentType,
 						})),
+						mode: DYNAMIC_TOOLSETS ? 'dynamic_toolsets' : 'static',
+						toolCount: catalog.count(),
 						allowAllOrigins: process.env.EDA_WS_ALLOW_ALL_ORIGINS === '1',
 					}),
 				}],
@@ -62,7 +76,7 @@ async function main() {
 
 	server.tool(
 		'list_instances',
-		'List all connected EasyEDA Pro instances with their current state (project, active document, open tabs). Use this to find the instance_id you need for other tools when multiple instances are connected.',
+		'List connected EasyEDA Pro instances with their state (project, active document, tabs). Use to find instance_id when multiple are connected.',
 		{},
 		async () => {
 			await bridge.refreshAllInstanceInfo();
@@ -99,24 +113,34 @@ async function main() {
 		},
 	);
 
-	registerReadTools(server, bridge);
-	registerWriteTools(server, bridge);
-	registerAnalysisTools(server, bridge);
-	registerSchReadTools(server, bridge);
-	registerSchWriteTools(server, bridge);
-	registerLibTools(server, bridge);
-	registerManufactureTools(server, bridge);
-	registerPcbDrcTools(server, bridge);
-	registerPcbLayerTools(server, bridge);
-	registerEditorTools(server, bridge);
-	registerSchAnalysisTools(server, bridge);
+	// Register every concrete tool against the catalog. Module signatures
+	// expect McpServer; the catalog quacks the same `.tool()` shape so a
+	// type cast is enough.
+	const registrar = catalog as unknown as McpServer;
+	registerReadTools(registrar, bridge);
+	registerWriteTools(registrar, bridge);
+	registerAnalysisTools(registrar, bridge);
+	registerSchReadTools(registrar, bridge);
+	registerSchWriteTools(registrar, bridge);
+	registerLibTools(registrar, bridge);
+	registerManufactureTools(registrar, bridge);
+	registerPcbDrcTools(registrar, bridge);
+	registerPcbLayerTools(registrar, bridge);
+	registerEditorTools(registrar, bridge);
+	registerSchAnalysisTools(registrar, bridge);
+
+	if (DYNAMIC_TOOLSETS) {
+		catalog.attachDynamic(server);
+		// Pre-warm the embeddings model in the background so the first
+		// search_tools call doesn't pay the load cost in the user's path.
+		setTimeout(() => catalog.prewarm(), 50);
+	} else {
+		catalog.attachStatic(server);
+	}
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 
-	// Capture clientInfo from the MCP `initialize` request once the client
-	// completes the handshake. Surface it on the bridge so the extension
-	// can label "Claude Code chat XYZ" / "Codex chat ABC" connections.
 	const underlying = (server as any).server;
 	if (underlying) {
 		underlying.oninitialized = () => {
@@ -129,9 +153,9 @@ async function main() {
 	}
 
 	console.error('[MCP] EasyEDA Agent MCP Server started');
+	console.error(`[MCP] Mode: ${DYNAMIC_TOOLSETS ? 'dynamic toolsets (3 meta-tools)' : 'static'}, ${catalog.count()} concrete tools in catalog`);
 	console.error(`[MCP] WebSocket Server on port ${bridge.getPort()}, waiting for EDA Pro Extension...`);
 
-	// Notify any peer MCP servers so their connected extensions discover us immediately
 	bridge.notifyPeers(PORT_RANGE_START, PORT_RANGE_SIZE);
 
 	process.on('SIGINT', async () => {

@@ -15,6 +15,9 @@ const extensionConfig: esbuild.BuildOptions = {
 };
 
 // MCP Server build: CJS for Node.js
+//
+// Heavy / native deps stay external — they ship native .node binaries that
+// esbuild can't bundle. The runtime resolves them from node_modules normally.
 const mcpServerConfig: esbuild.BuildOptions = {
 	entryPoints: { 'index': './src/mcp-server/index' },
 	entryNames: '[name]',
@@ -24,7 +27,12 @@ const mcpServerConfig: esbuild.BuildOptions = {
 	platform: 'node',
 	format: 'cjs',
 	treeShaking: true,
-	external: [],
+	external: [
+		'@xenova/transformers',
+		'onnxruntime-node',
+		'onnxruntime-web',
+		'sharp',
+	],
 };
 
 (async () => {
