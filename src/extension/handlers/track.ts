@@ -114,11 +114,18 @@ export const trackHandlers: Record<string, (params: Record<string, any>) => Prom
 		const all = await eda.pcb_PrimitiveLine.getAll(params.net, layer, undefined);
 		let lines = all || [];
 
-		if (params.preserveLocked) {
-			lines = lines.filter((l: any) => !l.getState_PrimitiveLock?.());
-		}
+		const lockedOf = (l: any): boolean => {
+			try { if (typeof l?.getState_PrimitiveLock === 'function') return !!l.getState_PrimitiveLock(); } catch {/* */}
+			return !!l?.primitiveLock || !!l?.locked;
+		};
+		const idOf = (l: any): string | undefined => {
+			try { if (typeof l?.getState_PrimitiveId === 'function') return l.getState_PrimitiveId(); } catch {/* */}
+			return l?.primitiveId ?? l?.globalIndex;
+		};
 
-		const ids = lines.map((l: any) => l.getState_PrimitiveId?.()).filter(Boolean);
+		if (params.preserveLocked) lines = lines.filter((l: any) => !lockedOf(l));
+
+		const ids = lines.map(idOf).filter((x): x is string => Boolean(x));
 		if (ids.length === 0) return { deletedCount: 0, ids: [] };
 		const ok = await eda.pcb_PrimitiveLine.delete(ids);
 		return { deletedCount: ok ? ids.length : 0, ids };

@@ -90,14 +90,30 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 		const ref: string = params.reference;
 		const padNum: string = String(params.padNumber);
 
+		const designatorOf = (c: any): string | undefined => {
+			try { if (typeof c?.getState_Designator === 'function') return c.getState_Designator(); } catch {/* */}
+			return c?.designator;
+		};
+		const idOf = (c: any): string | undefined => {
+			try { if (typeof c?.getState_PrimitiveId === 'function') return c.getState_PrimitiveId(); } catch {/* */}
+			return c?.primitiveId;
+		};
+		const padNumberOf = (p: any): string | undefined => {
+			try { if (typeof p?.getState_PadNumber === 'function') return String(p.getState_PadNumber()); } catch {/* */}
+			return p?.padNumber != null ? String(p.padNumber) : undefined;
+		};
+
 		const components = await eda.pcb_PrimitiveComponent.getAll();
-		const target = (components || []).find((c: any) => c?.getState_Designator?.() === ref);
+		const target = (components || []).find((c: any) => designatorOf(c) === ref);
 		if (!target) {
 			throw new Error(`Component with designator "${ref}" not found on PCB.`);
 		}
-		const targetId = target.getState_PrimitiveId?.();
+		const targetId = idOf(target);
+		if (!targetId) {
+			throw new Error(`Could not resolve primitiveId for component "${ref}".`);
+		}
 		const pads = await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(targetId);
-		const pad = (pads || []).find((p: any) => String(p?.getState_PadNumber?.()) === padNum);
+		const pad = (pads || []).find((p: any) => padNumberOf(p) === padNum);
 		if (!pad) {
 			throw new Error(`Pad ${padNum} not found on component ${ref}.`);
 		}
@@ -136,9 +152,13 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 			lines.push(a, b);
 		}
 
+		const idOf = (l: any): string | undefined => {
+			try { if (typeof l?.getState_PrimitiveId === 'function') return l.getState_PrimitiveId(); } catch {/* */}
+			return l?.primitiveId;
+		};
 		return {
 			segmentCount: lines.length,
-			primitiveIds: lines.map((l) => l?.getState_PrimitiveId?.()).filter(Boolean),
+			primitiveIds: lines.map(idOf).filter(Boolean),
 		};
 	},
 };

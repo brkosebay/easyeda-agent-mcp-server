@@ -100,17 +100,30 @@ export const pourFillHandlers: Record<string, (params: Record<string, any>) => P
 		const lines = await eda.pcb_PrimitiveLine.getAll(undefined, 11 as any, undefined);
 		const arcs = await eda.pcb_PrimitiveArc.getAll(undefined, 11 as any, undefined);
 
+		// EasyEDA's runtime sometimes returns class instances (with getState_*
+		// methods) and sometimes plain objects (with the values flattened to
+		// startX/endX/start.x/end.x). Try every shape we've seen.
+		const readCoord = (p: any, axis: 'X' | 'Y', end: 'Start' | 'End'): number => {
+			const m = p?.[`getState_${end}${axis}`];
+			if (typeof m === 'function') {
+				try { const v = m.call(p); if (Number.isFinite(v)) return v; } catch {/* */}
+			}
+			const flat = p?.[`${end.toLowerCase()}${axis}`];
+			if (Number.isFinite(flat)) return flat;
+			const nested = p?.[end.toLowerCase()]?.[axis.toLowerCase()];
+			if (Number.isFinite(nested)) return nested;
+			return 0;
+		};
+
 		const xs: number[] = [];
 		const ys: number[] = [];
 		for (const l of lines || []) {
-			const li: any = l;
-			xs.push(li.getState_StartX?.() ?? 0, li.getState_EndX?.() ?? 0);
-			ys.push(li.getState_StartY?.() ?? 0, li.getState_EndY?.() ?? 0);
+			xs.push(readCoord(l, 'X', 'Start'), readCoord(l, 'X', 'End'));
+			ys.push(readCoord(l, 'Y', 'Start'), readCoord(l, 'Y', 'End'));
 		}
 		for (const a of arcs || []) {
-			const ai: any = a;
-			xs.push(ai.getState_StartX?.() ?? 0, ai.getState_EndX?.() ?? 0);
-			ys.push(ai.getState_StartY?.() ?? 0, ai.getState_EndY?.() ?? 0);
+			xs.push(readCoord(a, 'X', 'Start'), readCoord(a, 'X', 'End'));
+			ys.push(readCoord(a, 'Y', 'Start'), readCoord(a, 'Y', 'End'));
 		}
 
 		if (xs.length === 0) {
@@ -159,24 +172,52 @@ export const pourFillHandlers: Record<string, (params: Record<string, any>) => P
 		const layer = params?.layer != null ? normalizeLayer(params.layer) : undefined;
 		const pours = await eda.pcb_PrimitivePour.getAll(params?.net, layer, undefined);
 		let rebuilt = 0;
+		let skippedLocked = 0;
 		const failures: Array<{ primitiveId: string; reason: string }> = [];
 
-		for (const pour of pours || []) {
+		// Defensive accessors — handle both class-instance and plain-object
+		// forms the runtime returns.
+		const idOf = (p: any): string => {
 			try {
-				if (pour.getState_PrimitiveLock?.()) continue;
-				const out = await pour.rebuildCopperRegion?.();
+				const v = typeof p?.getState_PrimitiveId === 'function' ? p.getState_PrimitiveId() : undefined;
+				if (v) return v;
+			} catch {/* */}
+			return p?.primitiveId ?? p?.id ?? 'unknown';
+		};
+		const lockedOf = (p: any): boolean => {
+			try {
+				if (typeof p?.getState_PrimitiveLock === 'function') return !!p.getState_PrimitiveLock();
+			} catch {/* */}
+			return !!p?.primitiveLock;
+		};
+
+		for (const pour of pours || []) {
+			const primitiveId = idOf(pour);
+			try {
+				if (lockedOf(pour)) { skippedLocked += 1; continue; }
+				let out: unknown = undefined;
+				if (typeof (pour as any)?.rebuildCopperRegion === 'function') {
+					out = await (pour as any).rebuildCopperRegion();
+				} else {
+					// Plain-object pour — fetch live instance, then rebuild.
+					const live = await eda.pcb_PrimitivePour.get(primitiveId).catch(() => undefined);
+					if (live && typeof (live as any).rebuildCopperRegion === 'function') {
+						out = await (live as any).rebuildCopperRegion();
+					} else {
+						failures.push({ primitiveId, reason: 'rebuildCopperRegion not available on this pour instance' });
+						continue;
+					}
+				}
 				if (out) rebuilt += 1;
 			} catch (err: any) {
-				failures.push({
-					primitiveId: pour.getState_PrimitiveId?.() || 'unknown',
-					reason: err?.message ?? String(err),
-				});
+				failures.push({ primitiveId, reason: err?.message ?? String(err) });
 			}
 		}
 
 		return {
 			pourCount: pours?.length ?? 0,
 			rebuilt,
+			skippedLocked,
 			failures,
 		};
 	},
