@@ -1,11 +1,22 @@
 {
 	"name": "easyeda-agent-mcp-server",
-	"version": "1.0.0",
+	"version": "2.1.21",
 	"description": "MCP Server + EDA Pro Extension - Connect Claude Code to EasyEDA Pro",
 	"private": true,
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/brkosebay/easyeda-agent-mcp-server.git"
+	},
+	"homepage": "https://github.com/brkosebay/easyeda-agent-mcp-server#readme",
+	"bugs": {
+		"url": "https://github.com/brkosebay/easyeda-agent-mcp-server/issues"
+	},
 	"scripts": {
 		"compile": "rimraf ./dist/ && ts-node ./config/esbuild.prod.ts",
 		"build": "npm run compile && ts-node ./build/packaged.ts",
+		"build:release": "rimraf ./dist/ && ts-node ./config/esbuild.prod.ts --release && ts-node ./build/packaged.ts",
+		"test:smoke": "node scripts/run-smoke.mjs",
 		"start": "node dist/mcp-server/index.js",
 		"typecheck": "npm run typecheck:mcp && npm run typecheck:extension",
 		"typecheck:mcp": "tsc --noEmit",

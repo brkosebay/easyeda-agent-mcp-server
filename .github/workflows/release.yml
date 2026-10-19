@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tag matches extension.json version
+        run: |
+          version=$(node -p "require('./extension.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match extension.json version v$version"; exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:smoke
+      - run: npm run build:release
+      - name: Package embeds no local paths
+        run: |
+          if unzip -p build/dist/*.eext dist/index.js | grep -n -E '/(Users|home)/[^/"]+/\.easyeda-mcp'; then
+            echo "::error::release package embeds a local token path"; exit 1
+          fi
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(awk -v ver="${GITHUB_REF_NAME#v}" 'index($0, "## " ver " ") == 1 {found=1; next} /^## / && found {exit} found' CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" build/dist/*.eext --title "$GITHUB_REF_NAME" --notes "${notes:-See CHANGELOG.md}"

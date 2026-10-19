@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:smoke
+      - run: npm run build:release
+      - name: Package embeds no local paths
+        run: |
+          if unzip -p build/dist/*.eext dist/index.js | grep -n -E '/(Users|home)/[^/"]+/\.easyeda-mcp'; then
+            echo "::error::release package embeds a local token path"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: matrix.node == 22
+        with:
+          name: easyeda-agent-eext
+          path: build/dist/*.eext

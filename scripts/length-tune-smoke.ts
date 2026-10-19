@@ -25,7 +25,9 @@ let components = ['cA', 'cB', 'cJ', 'cK'];
 (globalThis as any).eda = {
 	dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ uuid: 'doc1', documentType: 3 }) },
 	pcb_PrimitiveComponent: {
-		getAll: async () => components.map((id) => ({ primitiveId: id, designator: id.slice(1), x: 0, y: 0 })),
+		// Origins sit on the component's pins in mil (EasyEDA 2.x: origin mil,
+		// pins 10-mil), so the runtime pin-unit probe (pin-units.ts) detects ×10.
+		getAll: async () => components.map((id) => ({ primitiveId: id, designator: id.slice(1), x: (pins[id]?.[0]?.x ?? 0) * 10, y: (pins[id]?.[0]?.y ?? 0) * 10 })),
 		getAllPinsByPrimitiveId: async (id: string) => pins[id] ?? [],
 	},
 	pcb_PrimitiveLine: {
