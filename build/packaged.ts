@@ -58,6 +58,8 @@ function main() {
 		zip.file(file, fs.createReadStream(__dirname + '/../' + file));
 	}
 
+	// build/dist/ holds only (gitignored) .eext files, so a fresh clone lacks it.
+	fs.ensureDirSync(__dirname + '/dist');
 	zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true }).pipe(
 		fs.createWriteStream(__dirname + '/dist/' + extensionConfig.name + '_v' + extensionConfig.version + '.eext'),
 	);
