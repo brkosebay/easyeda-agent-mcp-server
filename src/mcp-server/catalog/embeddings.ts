@@ -4,13 +4,21 @@
 // 80 tools at startup takes ~3 s on first run, ~200 ms on subsequent runs
 // once the model is in the disk cache.
 //
-// We also persist a tiny JSON of {hash, vectors} under .embed-cache.json so
-// we can skip re-embedding on every server restart (model load itself stays
-// cheap thanks to the HF cache).
+// We also persist {hash, vectors} in ONE shared cache file under the daemon
+// directory, so every MCP process — whatever its working directory — reuses
+// the same vectors instead of re-embedding the corpus.
+//
+// Memory: the corpus is embedded in small, length-sorted batches. One batch of
+// all ~230 tools (padded to the longest description) made onnxruntime's CPU
+// arena peak at ~7 GB, and the arena keeps its peak for the life of the
+// process — every MCP server that missed the cache sat at 6.5 GB.
 
 import { createHash } from 'crypto';
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname, join, resolve } from 'path';
+import { readFile, writeFile, mkdir, rename } from 'fs/promises';
+import { homedir } from 'os';
+import { dirname, join } from 'path';
+
+const EMBED_BATCH = 8;
 
 let pipelinePromise: Promise<any> | null = null;
 
@@ -49,8 +57,7 @@ export function cosine(a: number[], b: number[]): number {
 	return dot;
 }
 
-const CACHE_DIR = resolve(process.cwd(), '.cache');
-const CACHE_FILE = join(CACHE_DIR, 'tool-embeddings.json');
+const CACHE_FILE = join(process.env.EDA_DAEMON_DIR || join(homedir(), '.easyeda-mcp'), 'cache', 'tool-embeddings.json');
 
 interface EmbeddingsCache {
 	hash: string;
@@ -75,25 +82,38 @@ async function loadCache(): Promise<EmbeddingsCache | null> {
 async function saveCache(cache: EmbeddingsCache): Promise<void> {
 	try {
 		await mkdir(dirname(CACHE_FILE), { recursive: true });
-		await writeFile(CACHE_FILE, JSON.stringify(cache));
+		// Write-then-rename: concurrent MCP processes never read a torn file.
+		const tmp = `${CACHE_FILE}.${process.pid}.tmp`;
+		await writeFile(tmp, JSON.stringify(cache));
+		await rename(tmp, CACHE_FILE);
 	} catch {/* best-effort */}
+}
+
+/** Cached corpus vectors if the shared cache matches, without loading the model. */
+export async function loadCachedCorpus(
+	entries: Array<{ name: string; text: string }>,
+): Promise<Record<string, number[]> | null> {
+	const cached = await loadCache();
+	return cached && cached.hash === hashCorpus(entries) ? cached.vectors : null;
 }
 
 export async function embedCorpus(
 	entries: Array<{ name: string; text: string }>,
 ): Promise<Record<string, number[]>> {
-	const wantHash = hashCorpus(entries);
-	const cached = await loadCache();
-	if (cached && cached.hash === wantHash) {
-		return cached.vectors;
-	}
+	const cached = await loadCachedCorpus(entries);
+	if (cached) return cached;
 
 	const embed = await getEmbedder();
-	const vectors = await embed(entries.map((e) => e.text));
 	const out: Record<string, number[]> = {};
-	for (let i = 0; i < entries.length; i++) out[entries[i].name] = vectors[i];
+	// Similar lengths per batch keep padding (and the attention tensors) small.
+	const ordered = entries.slice().sort((a, b) => a.text.length - b.text.length);
+	for (let i = 0; i < ordered.length; i += EMBED_BATCH) {
+		const batch = ordered.slice(i, i + EMBED_BATCH);
+		const vectors = await embed(batch.map((e) => e.text));
+		batch.forEach((e, j) => { out[e.name] = vectors[j]; });
+	}
 
-	await saveCache({ hash: wantHash, vectors: out });
+	await saveCache({ hash: hashCorpus(entries), vectors: out });
 	return out;
 }
 

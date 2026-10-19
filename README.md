@@ -115,11 +115,24 @@ Claude Code users get two ready-made subagents (`.claude/agents/eda-worker.md`, 
 |---|---|---|
 | `EDA_DYNAMIC_TOOLSETS` | `1` | `0` exposes every tool individually instead of the three meta-tools. |
 | `EDA_DAEMON` | `1` | `0` runs the legacy in-process WebSocket bridge (one MCP server per extension connection). |
-| `EDA_DAEMON_DIR` | `~/.easyeda-mcp` | Daemon socket, lock, log, token and export directory. |
+| `EDA_DAEMON_DIR` | `~/.easyeda-mcp` | Daemon socket, lock, log, token, export and tool-embedding cache directory. |
+| `EDA_DAEMON_IDLE_EXIT_MS` | `600000` | The daemon exits after this long with no MCP server connected (the next one restarts it). `0` keeps it running. |
 | `EDA_WS_PORT` | `15168` | First port of the extension WebSocket range. |
 | `EDA_WS_TIMEOUT_MS` / `EDA_WS_QUICK_TIMEOUT_MS` | 120000 / 5000 | Default request timeouts for long and quick tools. |
 
 Exports land in `~/.easyeda-mcp/exports/`. The daemon log is `~/.easyeda-mcp/daemon.log`.
+
+### Resource usage
+
+Every MCP client session that has this server configured starts its own MCP server process:
+
+- An idle server uses about 170 MB. It loads the local embedding model only on its first `search_tools` call, which
+  brings it to about 470 MB.
+- A server exits when its client closes the connection or its parent process disappears.
+- The shared daemon exits after 10 idle minutes.
+
+To avoid starting the server in sessions that never touch EasyEDA, register it per project instead of globally (e.g.
+`claude mcp add --scope project …` inside your hardware repo).
 
 ### Optional: external autorouter
 

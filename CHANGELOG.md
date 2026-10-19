@@ -19,6 +19,19 @@ First public release. Adds support for EasyEDA Pro 3.x; details in
 - `sch_get_all_wires` net filtering is done client-side; the 3.x native filter returns nothing.
 - `engines.eda` widened to `>=2.3.0`.
 
+### Memory and process lifecycle
+- **MCP servers no longer sit at ~6.5 GB.** On a cache miss the tool corpus was embedded in one batch, and
+  onnxruntime's CPU arena kept that ~7 GB peak for the life of the process. Every session with the server configured
+  hit this after each rebuild, and several at once exhausted the machine. The corpus is now embedded in small
+  length-sorted batches (peak about 470 MB).
+- Startup no longer loads the embedding model; it only reads the cache. Idle servers stay at about 170 MB.
+- One shared embedding cache under `~/.easyeda-mcp/cache/` replaces a separate `.cache/` in every client's working
+  directory.
+- MCP servers exit when stdin closes, stdout breaks, or their parent process dies (orphans reparented to launchd used to
+  run for days).
+- The daemon exits after 10 minutes with no MCP server connected (`EDA_DAEMON_IDLE_EXIT_MS`), and respawns on the next
+  request.
+
 ### Bridge and release
 - The bridge generation now comes from the extension version, so an in-place upgrade always replaces the previous
   bundle's socket handlers.

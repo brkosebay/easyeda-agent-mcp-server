@@ -53,6 +53,8 @@ const DYNAMIC_TOOLSETS = process.env.EDA_DYNAMIC_TOOLSETS !== '0';
 // and use the legacy per-MCP WebSocketBridge.
 const USE_DAEMON = process.env.EDA_DAEMON !== '0';
 
+const PARENT_WATCH_MS = 10_000;
+
 async function main() {
 	const bridge: any = USE_DAEMON
 		? new DaemonClient()
@@ -299,15 +301,31 @@ async function main() {
 		(bridge as WebSocketBridge).notifyPeers(PORT_RANGE_START, PORT_RANGE_SIZE);
 	}
 
-	process.on('SIGINT', async () => {
-		await bridge.stop();
+	// Live exactly as long as the client. stdin EOF is the normal signal, but a
+	// client that dies through a wrapper (Claude Desktop launches servers via a
+	// helper) can leave this process reparented to launchd, so also watch the
+	// parent pid and stdout. Orphans used to accumulate for days.
+	let stopping = false;
+	const shutdown = async (reason: string) => {
+		if (stopping) return;
+		stopping = true;
+		console.error(`[MCP] Shutting down: ${reason}`);
+		setTimeout(() => process.exit(0), 3_000).unref(); // never hang on a slow bridge stop
+		try { await bridge.stop(); } catch {/* exiting anyway */}
 		process.exit(0);
+	};
+	process.stdin.on('end', () => void shutdown('client closed stdin'));
+	process.stdin.on('close', () => void shutdown('client closed stdin'));
+	process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+		if (err?.code === 'EPIPE' || err?.code === 'ERR_STREAM_DESTROYED') void shutdown('client closed stdout');
 	});
-
-	process.on('SIGTERM', async () => {
-		await bridge.stop();
-		process.exit(0);
-	});
+	const parentPid = process.ppid;
+	setInterval(() => {
+		if (process.ppid !== parentPid) void shutdown(`parent process ${parentPid} exited`);
+	}, PARENT_WATCH_MS).unref();
+	process.on('SIGINT', () => void shutdown('SIGINT'));
+	process.on('SIGTERM', () => void shutdown('SIGTERM'));
+	process.on('SIGHUP', () => void shutdown('SIGHUP'));
 }
 
 main().catch((err) => {

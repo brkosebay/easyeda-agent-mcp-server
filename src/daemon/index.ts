@@ -99,6 +99,8 @@ const KEEP_ALIVE_MS = 15_000;
 // clean close, laptop slept). Terminate it so agents fail fast and the next
 // connection from that instance is accepted as the live one.
 const EXTENSION_SILENCE_LIMIT_MS = Number(process.env.EDA_DAEMON_EXT_SILENCE_MS) || 90_000;
+// Exit after this long with no MCP server connected; 0 keeps the daemon up forever.
+const IDLE_EXIT_MS = process.env.EDA_DAEMON_IDLE_EXIT_MS != null ? Number(process.env.EDA_DAEMON_IDLE_EXIT_MS) : 10 * 60_000;
 const INFO_REFRESH_TIMEOUT_MS = 3_000;
 const DAEMON_STARTED_AT = Date.now();
 const BOARD_CACHE_DEFAULT_TTL_MS = Number(process.env.EDA_DAEMON_BOARD_CACHE_TTL_MS) || 10_000;
@@ -176,6 +178,20 @@ class Daemon {
 		};
 		process.on('SIGINT', onShutdown);
 		process.on('SIGTERM', onShutdown);
+
+		// The daemon only exists to serve MCP servers, and the first one to start
+		// respawns it, so leave once none has been connected for a while instead
+		// of living for days. An open EasyEDA extension alone does not keep it up.
+		if (IDLE_EXIT_MS > 0) {
+			let idleSince = Date.now();
+			setInterval(() => {
+				if (this.agents.size > 0) { idleSince = Date.now(); return; }
+				if (Date.now() - idleSince < IDLE_EXIT_MS) return;
+				const idleFor = IDLE_EXIT_MS >= 60_000 ? `${Math.round(IDLE_EXIT_MS / 60_000)} min` : `${Math.round(IDLE_EXIT_MS / 1000)} s`;
+				this.log(`No MCP server connected for ${idleFor}; exiting (the next MCP server restarts the daemon).`);
+				void onShutdown();
+			}, Math.min(30_000, IDLE_EXIT_MS)).unref();
+		}
 	}
 
 	private async acquireSingletonLock(): Promise<void> {

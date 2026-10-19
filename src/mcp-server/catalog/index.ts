@@ -10,7 +10,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z, ZodRawShape, ZodTypeAny } from 'zod';
 import { inferTags, CATEGORY_OVERVIEW } from './tags';
-import { embedCorpus, embedQuery, cosine } from './embeddings';
+import { embedCorpus, embedQuery, cosine, loadCachedCorpus } from './embeddings';
 import type { ToolDefinition, ToolHandler, ToolSearchResult } from './types';
 import { leaseContext, leaseSupportError } from '../lease-context';
 import { shapeToolResult, readStoredResult, fitToBudget, resolveResultHandles, DEFAULT_MAX_CHARS } from './response-shaper';
@@ -285,24 +285,29 @@ export class ToolCatalog {
 		}
 	}
 
+	private corpus(): Array<{ name: string; text: string }> {
+		return Array.from(this.tools.values()).map((t) => ({
+			name: t.name,
+			text: `${t.name} ${t.brief} tags: ${t.tags.join(' ')}`,
+		}));
+	}
+
 	private ensureVectors(): Promise<Record<string, number[]>> {
-		if (!this.vectorsPromise) {
-			const corpus = Array.from(this.tools.values()).map((t) => ({
-				name: t.name,
-				text: `${t.name} ${t.brief} tags: ${t.tags.join(' ')}`,
-			}));
-			this.vectorsPromise = embedCorpus(corpus);
-		}
+		if (!this.vectorsPromise) this.vectorsPromise = embedCorpus(this.corpus());
 		return this.vectorsPromise;
 	}
 
 	/**
-	 * Pre-warm embeddings on a background timer (best-effort). Call after
-	 * server startup so the first search_tools call doesn't pay the model
-	 * load cost in the user's request path.
+	 * Best-effort startup warm-up that only reads the shared vector cache. It
+	 * never loads the model: every Claude/Codex session with this server
+	 * configured starts one, most never search, and a cache miss is
+	 * re-embedded on the first real search_tools call instead.
 	 */
 	prewarm(): void {
-		this.ensureVectors().catch(() => {/* model load failed; we'll fall back to keyword */});
+		if (this.vectorsPromise) return;
+		loadCachedCorpus(this.corpus())
+			.then((vectors) => { if (vectors && !this.vectorsPromise) this.vectorsPromise = Promise.resolve(vectors); })
+			.catch(() => {/* no cache; first search embeds */});
 	}
 }
 
