@@ -38,6 +38,7 @@ import { registerFunctionalTools } from './tools/functional-tools';
 import { registerNativeEditorTools } from './tools/native-editor-tools';
 import { registerSplitPourTools } from './tools/split-pour-tools';
 import { registerRoutePairTools } from './tools/route-pair-tools';
+import { registerNativeAutorouteTools } from './tools/native-autoroute-tools';
 
 const PORT_RANGE_START = Number(process.env.EDA_WS_PORT) || 15168;
 const PORT_RANGE_SIZE = Number(process.env.EDA_WS_PORT_RANGE) || 40;
@@ -265,6 +266,7 @@ async function main() {
 	registerNativeEditorTools(registrar, bridge);
 	registerSplitPourTools(registrar, bridge);
 	registerRoutePairTools(registrar, bridge);
+	registerNativeAutorouteTools(registrar, bridge);
 
 	if (DYNAMIC_TOOLSETS) {
 		catalog.attachDynamic(server);

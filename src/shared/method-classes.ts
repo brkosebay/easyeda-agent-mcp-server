@@ -19,6 +19,9 @@ export const GATE_BYPASS_METHODS = new Set<string>([
 	// Reports the in-memory repour job record; its optional SDK probe is
 	// time-bounded, so it can never hold anything.
 	'pcb.pour.jobStatus',
+	// Same for native autoroute/autolayout jobs; refresh:true adds one
+	// time-bounded board read.
+	'pcb.native.autoJobStatus',
 	// Escape for the editor: must work while something holds the queue.
 	'editor.native.cancelCommand',
 ]);

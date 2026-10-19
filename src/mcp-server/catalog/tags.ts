@@ -33,6 +33,10 @@ export function inferTags(name: string): string[] {
 	// write rule below would otherwise mis-tag it.
 	if (n === 'pcb_route_geometry_report') tags.add('read');
 	if (n === 'pcb_plan_split_pours' || n === 'pcb_layer_report') { tags.add('read'); tags.add('analyze'); }
+	// EasyEDA's own autorouter/autoplacer: the generic _route_/_place_ rules miss these names.
+	if (n === 'pcb_native_autoroute') { tags.add('write'); tags.add('track'); }
+	if (n === 'pcb_native_autolayout') { tags.add('write'); tags.add('placement'); }
+	if (n === 'pcb_native_auto_job_status') { tags.add('read'); tags.add('track'); }
 
 	if (/_get_|_get$|_list|_inspect|_suggest_|_review_|_check_|_worklist|_context|_presets/.test(n) || n.endsWith('_help')) tags.add('read');
 	if (/_create_|_modify_|_delete_|_save|_import|_export|_move_|_place_|_route_|_repour|_rebuild|_refresh|_set_|_stitch|_lock|_fanout|_length_match|_batch_edit|_pathfind/.test(n)) tags.add('write');
@@ -86,7 +90,7 @@ datasheet — LCSC PDF fetch + local cache management.
 bundle — verification ZIP export for tool-less verifier agents.
 thermal — per-component dissipation estimates.
 lib — device search/lookup (incl. by LCSC code).
-manufacture — gerber/BOM/dsn/pdf export, autoroute import, fastroute/FreeRouting autoroute (diff pairs, length matching from board rules).
+manufacture — gerber/BOM/dsn/pdf export, autoroute import, fastroute/FreeRouting autoroute (diff pairs, length matching from board rules), EasyEDA's native autorouter/autolayout (3.2.150+, beta; scratch boards).
 editor — tabs, current document, project structure, instances, wait_for_extension.
 
 Tag filters available: pcb, sch, lib, editor, read, write, analyze, drc, pour, via, track, pad, layer, net, canvas, manufacture, lookup, component, placement, wire, bom, sourcing, datasheet, bundle, emc, thermal, cross, dfm, spice, release, docgen, impedance, functional.`;

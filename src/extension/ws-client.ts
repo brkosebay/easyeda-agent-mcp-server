@@ -33,6 +33,7 @@ import { nativeEditorHandlers } from './handlers/native-editor';
 import { splitPourHandlers } from './handlers/split-pour';
 import { layerAnalysisHandlers } from './handlers/layer-analysis';
 import { routePairHandlers } from './handlers/route-pair';
+import { nativeAutorouteHandlers } from './handlers/native-autoroute';
 import { didTimeOut, flattenState, withTimeout } from './handlers/_utils';
 import { selectionGuardKind, withSelectionGuard } from './selection-guard';
 import { GATE_BYPASS_METHODS, isReadMethod } from '../shared/method-classes';
@@ -449,6 +450,9 @@ const DEADLINE_AWARE_METHODS = new Set<string>([
 	'pcb.splitPour.create',
 	'pcb.layer.moveTracks',
 	'pcb.route.pair',
+	// Size their pre-dispatch work and sync observation window to the deadline.
+	'pcb.native.autoroute',
+	'pcb.native.autolayout',
 ]);
 
 function lockKey(docUuid: string | undefined, method: string): string {
@@ -467,6 +471,7 @@ const allHandlers: Record<string, (params: Record<string, any>) => Promise<any>>
 	...splitPourHandlers,
 	...layerAnalysisHandlers,
 	...routePairHandlers,
+	...nativeAutorouteHandlers,
 	...viaHandlers,
 	...netHandlers,
 	...drcHandlers,
