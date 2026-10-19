@@ -19,7 +19,7 @@ export const instanceParam = {
 		.positive()
 		.optional()
 		.describe(
-			'Override the bridge request timeout for this call (ms). Default 45000. Bump for slow operations like pcb_export autoroute_json or pcb_autoroute (e.g. 300000 for 5 min). Also settable globally via EDA_WS_TIMEOUT_MS env.',
+			'Override the bridge request timeout for this call (ms). Omit to use the tool/server default. For long operations, bump per call or set EDA_WS_TIMEOUT_MS env.',
 		),
 };
 

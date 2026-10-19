@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { Daemon } from '../src/daemon/index';
+const daemon = new Daemon() as any;
+let released=0, delivered=0;
+const timer=setTimeout(()=>{},10000);
+const owner={pending:new Map([['rpc-1',{timer,release:()=>released++,agentId:'agent',mcpRequestId:'mcp-1',writeLock:false}]])};
+const attacker={pending:new Map()};
+daemon.extReqIndex.set('rpc-1',owner);
+daemon.agents.set('agent',{});
+daemon.writeAgent=()=>delivered++;
+daemon.routeExtensionResponse(attacker,{id:'rpc-1',result:'spoof'});
+assert.equal(released,0);assert.equal(delivered,0);assert.equal(owner.pending.size,1);
+daemon.routeExtensionResponse(owner,{id:'rpc-1',result:'actual'});
+assert.equal(released,1);assert.equal(delivered,1);assert.equal(owner.pending.size,0);
+console.log('Native RPC responses are bound to the actual originating extension connection: passed.');

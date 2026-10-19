@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { equivalentNativeSource } from '../src/extension/native-source';
+const header='["DOCTYPE","PCB","1.8"]\n';
+const a='["COMPONENT","a",1,23]\n',b='["COMPONENT","b",1,45]\n',line='["LINE","l",1,2]\n';
+assert(equivalentNativeSource(header+a+line+b,header+line+b+a));
+assert(!equivalentNativeSource(header+a+b,header+a+a+b));
+assert(!equivalentNativeSource(header+a+b,header+a+b.replace('45','46')));
+assert(!equivalentNativeSource(header+a+header+b,header+b+header+a));
+assert(!equivalentNativeSource(header+line+'["LINE","m",2,3]\n',header+'["LINE","m",2,3]\n'+line));
+assert(!equivalentNativeSource('unrecognized a','unrecognized b'));
+assert(!equivalentNativeSource(header+a+a+b,header+a+b+a));
+assert(!equivalentNativeSource(header.replace('PCB','SCH')+a+b,header.replace('PCB','SCH')+b+a));
+console.log('Native source restore equivalence: passed.');

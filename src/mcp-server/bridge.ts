@@ -3,11 +3,37 @@ import type { IncomingMessage } from 'http';
 import { randomBytes } from 'crypto';
 
 const PEER_ORIGIN = 'http://easyeda-agent.internal';
+const DEFAULT_MAX_INSTANCE_CONNECTIONS = 4;
 
 const ALLOWED_ORIGIN_PATTERNS = [
 	/^https?:\/\/([a-z0-9-]+\.)*easyeda\.com(:\d+)?$/,
 	/^https?:\/\/([a-z0-9-]+\.)*lceda\.cn(:\d+)?$/,
+	// EasyEDA Pro desktop app — the Electron renderer sends "https://client"
+	// (or sometimes file://). Without these the WS gets 4001-rejected.
+	/^https?:\/\/client(:\d+)?$/,
+	/^file:\/\//,
 ];
+const QUICK_METHOD_TIMEOUT_MS = 5_000;
+// Headroom added to an explicit `_timeoutMs` when arming the bridge timer, so
+// the extension-side deadline always fires first.
+const BRIDGE_TIMEOUT_MARGIN_MS = 5_000;
+// editor.zoom* are deliberately absent: those handlers enforce their own
+// deadline (30s default, overridable via timeoutMs) and return a structured
+// error, which the 5s bridge cap used to pre-empt. The region methods are
+// absent too: they dispatch a never-settling SDK call and poll for
+// confirmation, and a full board scan can outlive 5s.
+const QUICK_METHOD_TIMEOUT_METHODS = new Set<string>([
+	'pcb.document.zoomToBoardOutline',
+	'pcb.document.navigateTo',
+	'pcb.document.getPrimitiveAtPoint',
+	'pcb.pad.findByRef',
+]);
+// Slow pcb.document.* writes that must NOT get the 5s quick timeout.
+const SLOW_DOCUMENT_METHODS = new Set<string>([
+	'pcb.document.save',
+	'pcb.document.importChanges',
+	'pcb.document.refresh',
+]);
 
 function isAllowedOrigin(origin: string | undefined): boolean {
 	if (!origin) return false;
@@ -40,6 +66,7 @@ export interface InstanceInfo {
 interface ConnectedClient {
 	ws: WebSocket;
 	info: InstanceInfo;
+	lastSeenAt: number;
 }
 
 interface PendingRequest {
@@ -62,12 +89,22 @@ export class WebSocketBridge {
 	private pendingRequests = new Map<string, PendingRequest>();
 	private requestIdCounter = 0;
 	private readonly timeout: number;
+	private readonly quickTimeout: number;
+	private readonly maxConnectedInstances: number;
 	readonly agentId: string;
 	private clientInfo: ClientInfo;
 
 	constructor(private readonly port: number = 15168, timeout?: number) {
 		const envTimeout = Number(process.env.EDA_WS_TIMEOUT_MS);
+		const envQuickTimeout = Number(process.env.EDA_WS_QUICK_TIMEOUT_MS);
+		const envMaxConnections = Number(process.env.EDA_MAX_INSTANCE_CONNECTIONS);
 		this.timeout = timeout ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 120_000);
+		this.quickTimeout = Number.isFinite(envQuickTimeout) && envQuickTimeout > 0
+			? envQuickTimeout
+			: QUICK_METHOD_TIMEOUT_MS;
+		this.maxConnectedInstances = Number.isFinite(envMaxConnections) && envMaxConnections > 0
+			? Math.floor(envMaxConnections)
+			: DEFAULT_MAX_INSTANCE_CONNECTIONS;
 		this.agentId = randomBytes(8).toString('hex');
 		this.clientInfo = { pid: process.pid, startedAt: Date.now() };
 	}
@@ -176,6 +213,8 @@ export class WebSocketBridge {
 				const url = new URL(req.url || '/', `http://localhost:${this.port}`);
 				const instanceId = url.searchParams.get('instanceId');
 
+				this.pruneClosedClients();
+
 				if (!instanceId) {
 					console.error('[Bridge] EDA Pro Extension connected without instanceId, rejecting');
 					ws.close(4001, 'instanceId query parameter required');
@@ -192,13 +231,16 @@ export class WebSocketBridge {
 				if (existing && existing.ws !== ws) {
 					console.error(`[Bridge] Replacing stale connection for instance ${instanceId}`);
 					try { existing.ws.close(); } catch {/* already closed */}
-					for (const [reqId, pending] of this.pendingRequests) {
-						if (pending.instanceId === instanceId) {
-							clearTimeout(pending.timer);
-							pending.reject(new Error(`Extension reconnected — request aborted (instance: ${instanceId})`));
-							this.pendingRequests.delete(reqId);
-						}
-					}
+					this.dropClient(instanceId, `Extension reconnected — request aborted (instance: ${instanceId})`);
+				}
+
+				if (this.clients.size >= this.maxConnectedInstances) {
+					console.error(
+						`[Bridge] Rejecting extension connect for ${instanceId}: `
+						+ `max instances ${this.maxConnectedInstances} reached.`,
+					);
+					try { ws.close(4002, `Too many instances. Limit: ${this.maxConnectedInstances}.`); } catch {/* ignore */}
+					return;
 				}
 
 				const client: ConnectedClient = {
@@ -207,8 +249,10 @@ export class WebSocketBridge {
 						instanceId,
 						connectedAt: Date.now(),
 					},
+					lastSeenAt: Date.now(),
 				};
 				this.clients.set(instanceId, client);
+				console.error(`[Bridge] Connected instances: ${this.clients.size}/${this.maxConnectedInstances}`);
 
 				ws.on('message', (data) => {
 					try {
@@ -239,14 +283,7 @@ export class WebSocketBridge {
 					const current = this.clients.get(instanceId);
 					if (current && current.ws === ws) {
 						console.error(`[Bridge] EDA Pro Extension disconnected (instance: ${instanceId})`);
-						this.clients.delete(instanceId);
-						for (const [id, pending] of this.pendingRequests) {
-							if (pending.instanceId === instanceId) {
-								clearTimeout(pending.timer);
-								pending.reject(new Error(`EDA Pro Extension disconnected (instance: ${instanceId})`));
-								this.pendingRequests.delete(id);
-							}
-						}
+						this.dropClient(instanceId, `EDA Pro Extension disconnected (instance: ${instanceId})`);
 					}
 				});
 
@@ -293,14 +330,17 @@ export class WebSocketBridge {
 	}
 
 	isConnected(): boolean {
+		this.pruneClosedClients();
 		return this.clients.size > 0;
 	}
 
 	getConnectedCount(): number {
+		this.pruneClosedClients();
 		return this.clients.size;
 	}
 
 	getConnectedInstances(): InstanceInfo[] {
+		this.pruneClosedClients();
 		return Array.from(this.clients.values())
 			.map((c) => ({ ...c.info }))
 			.sort((a, b) => b.connectedAt - a.connectedAt);
@@ -313,6 +353,8 @@ export class WebSocketBridge {
 	 * - If zero or multiple clients, throw a descriptive error.
 	 */
 	private resolveClient(instanceId?: string): ConnectedClient {
+		this.pruneClosedClients();
+
 		if (instanceId) {
 			const client = this.clients.get(instanceId);
 			if (!client || client.ws.readyState !== WebSocket.OPEN) {
@@ -363,10 +405,17 @@ export class WebSocketBridge {
 	 * If only one instance is connected, auto-selects it.
 	 */
 	async send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-		const { instance_id, _timeoutMs, ...forwardParams } = params;
+		const { instance_id, _timeoutMs, ...rest } = params;
 		const client = this.resolveClient(instance_id as string | undefined);
-		const timeoutMs = typeof _timeoutMs === 'number' && _timeoutMs > 0 ? _timeoutMs : undefined;
-		return this.sendToClient(client, method, forwardParams, timeoutMs);
+		const requested = Number(_timeoutMs);
+		if (!Number.isFinite(requested) || requested <= 0) {
+			return this.sendToClient(client, method, rest);
+		}
+		// Forward the handler-side deadline to the extension AND size the
+		// bridge timer above it, so the handler's own timeout fires first and
+		// returns a structured result instead of a bare bridge timeout.
+		const forwardParams = { ...rest, _timeoutMs: requested };
+		return this.sendToClient(client, method, forwardParams, requested + BRIDGE_TIMEOUT_MARGIN_MS);
 	}
 
 	/**
@@ -382,8 +431,12 @@ export class WebSocketBridge {
 
 	private async sendToClient(client: ConnectedClient, method: string, params: Record<string, unknown> = {}, timeoutOverride?: number): Promise<unknown> {
 		const id = String(++this.requestIdCounter);
-		const request: BridgeRequest = { id, method, params };
-		const timeout = timeoutOverride ?? this.timeout;
+		const timeout = timeoutOverride ?? (
+			this.isQuickMethod(method) ? this.quickTimeout : this.timeout
+		);
+		// The extension's operation gate releases a request still stuck in
+		// EasyEDA at this deadline instead of blocking every later request.
+		const request: BridgeRequest = { id, method, params: { ...params, _rpcTimeoutMs: timeout } };
 
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -394,6 +447,48 @@ export class WebSocketBridge {
 			this.pendingRequests.set(id, { resolve, reject, timer, instanceId: client.info.instanceId });
 			client.ws.send(JSON.stringify(request));
 		});
+	}
+
+	private isQuickMethod(method: string): boolean {
+		if (QUICK_METHOD_TIMEOUT_METHODS.has(method)) return true;
+		if (method.startsWith('pcb.getAll.')) return true;
+		if (method.startsWith('pcb.get.')) return true;
+		if (
+			method.startsWith('pcb.document.')
+			&& !method.startsWith('pcb.document.set')
+			&& !SLOW_DOCUMENT_METHODS.has(method)
+		) return true;
+		return method === 'pcb.component.getPins'
+			|| method === 'pcb.net.getAllNames'
+			|| method === 'pcb.net.getPrimitives'
+			|| method === 'pcb.net.getLength'
+			|| method === 'pcb.select.getAll';
+	}
+
+	private pruneClosedClients(): void {
+		for (const [instanceId, client] of this.clients) {
+			if (client.ws.readyState !== WebSocket.OPEN) {
+				this.dropClient(instanceId, 'Removing closed extension connection');
+			}
+		}
+	}
+
+	private dropClient(instanceId: string, reason: string): void {
+		const client = this.clients.get(instanceId);
+		if (!client) return;
+
+		this.clients.delete(instanceId);
+		for (const [id, pending] of this.pendingRequests) {
+			if (pending.instanceId !== instanceId) continue;
+			clearTimeout(pending.timer);
+			pending.reject(new Error(reason));
+			this.pendingRequests.delete(id);
+		}
+		try {
+			client.ws.close();
+		} catch {
+			// Already closed
+		}
 	}
 
 	/**
@@ -450,6 +545,13 @@ export class WebSocketBridge {
 			agentId: this.agentId,
 		});
 
+		// 2 second probe budget per peer is plenty — same-host loopback
+		// connects in <50ms when something is listening. Without this, a
+		// peer port that accepts the TCP connection but never speaks WS (a
+		// firewall/proxy/orphaned listener) would keep the socket open
+		// until the OS-level keepalive expires (minutes), leaking handles.
+		const PEER_PROBE_TIMEOUT_MS = 2_000;
+
 		for (let i = 0; i < portCount; i++) {
 			const peerPort = portStart + i;
 			if (peerPort === this.port) continue;
@@ -458,14 +560,30 @@ export class WebSocketBridge {
 				origin: PEER_ORIGIN,
 			});
 
+			let settled = false;
+			const cleanup = (): void => {
+				settled = true;
+				clearTimeout(probeTimer);
+				try { peerWs.terminate(); } catch {/* */}
+			};
+
+			const probeTimer = setTimeout(() => {
+				if (settled) return;
+				cleanup();
+			}, PEER_PROBE_TIMEOUT_MS);
+
 			peerWs.on('open', () => {
-				peerWs.send(notification);
-				peerWs.close();
+				if (settled) return;
+				try { peerWs.send(notification); } catch {/* */}
+				try { peerWs.close(); } catch {/* */}
+				clearTimeout(probeTimer);
+				settled = true;
 				console.error(`[Bridge] Notified peer on port ${peerPort}`);
 			});
 
-			// Silently ignore connection failures (no peer on that port)
-			peerWs.on('error', () => {});
+			peerWs.on('close', () => { if (!settled) cleanup(); });
+			// Silently ignore connection failures (no peer on that port).
+			peerWs.on('error', () => { if (!settled) cleanup(); });
 		}
 	}
 

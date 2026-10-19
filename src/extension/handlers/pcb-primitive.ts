@@ -1,11 +1,33 @@
-import { flattenState, flattenStateArray, normalizeLayer, normalizePolygon } from './_utils';
+import { envelopeStateArray, flattenState, flattenStateArray, normalizeLayer, normalizePolygon, withTimeout, didTimeOut } from './_utils';
+import { normalizePadShapeUnits, enforceTraceObstacles, type TraceSegmentSpec } from './trace-obstacles';
+import { componentPinScale, componentPinSourceUnits } from './pin-units';
+import { COORDINATE_SPACE, attachPolygonSummaries, readPourSource, summarizePolygonSource } from './pour-fill';
+
+const DEFAULT_PAD_LOOKUP_TIMEOUT_MS = 5_000;
+
+function getTimeoutMs(params: any, fallbackMs: number): number {
+	const explicit = Number(params?.timeoutMs);
+	const underscore = Number(params?._timeoutMs);
+	if (Number.isFinite(explicit) && explicit > 0) return explicit;
+	if (Number.isFinite(underscore) && underscore > 0) return underscore;
+	return fallbackMs;
+}
+
+async function awaitPadLookupCommand<T>(label: string, p: Promise<T>, params: any): Promise<T> {
+	const ms = getTimeoutMs(params, DEFAULT_PAD_LOOKUP_TIMEOUT_MS);
+	const out = await withTimeout(p, ms);
+	if (didTimeOut(out)) {
+		throw new Error(`${label} did not complete within ${ms}ms. EasyEDA may be busy resolving component/pin geometry; retry with a higher timeoutMs or a smaller query.`);
+	}
+	return out as T;
+}
 
 export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) => Promise<any>> = {
 	// === Arc ===
 
 	'pcb.getAll.arc': async (params) => {
 		const all = await eda.pcb_PrimitiveArc.getAll(params.net, normalizeLayer(params.layer), params.primitiveLock);
-		return flattenStateArray(all);
+		return envelopeStateArray(all, params);
 	},
 
 	'pcb.get.arc': async (params) => {
@@ -43,14 +65,30 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 
 	// === Region ===
 
+	// A region's ONLY geometry lives in its complexPolygon, which flattenState
+	// strips as a heavy field. Without a summary the response is unusable —
+	// so emit bbox + point count + a leading point sample alongside the
+	// identity fields, in the same canvas Y convention tracks/pads/vias use.
 	'pcb.getAll.region': async (params) => {
 		const all = await eda.pcb_PrimitiveRegion.getAll(normalizeLayer(params.layer), params.ruleType, params.primitiveLock);
-		return flattenStateArray(all);
+		const envelope = envelopeStateArray(all, params, { verbose: !!params.verbose });
+		attachPolygonSummaries(envelope, all);
+		return { ...envelope, coordinateSpace: COORDINATE_SPACE };
 	},
 
 	'pcb.get.region': async (params) => {
 		const result = await eda.pcb_PrimitiveRegion.get(params.primitiveIds);
-		return Array.isArray(result) ? flattenStateArray(result) : flattenState(result);
+		const verbose = !!params.verbose;
+		if (Array.isArray(result)) {
+			const flat = flattenStateArray(result, { verbose });
+			return flat.map((entry, i) => {
+				const s = summarizePolygonSource(readPourSource(result[i]));
+				return s ? { ...entry, summary: s, coordinateSpace: COORDINATE_SPACE } : entry;
+			});
+		}
+		const flat = flattenState(result, { verbose });
+		const s = summarizePolygonSource(readPourSource(result));
+		return s ? { ...flat, summary: s, coordinateSpace: COORDINATE_SPACE } : flat;
 	},
 
 	'pcb.create.region': async (params) => {
@@ -87,41 +125,62 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 	// === Pad lookup by ref+pin ===
 
 	'pcb.pad.findByRef': async (params) => {
-		const ref: string = params.reference;
-		const padNum: string = String(params.padNumber);
+		const lookup = async () => {
+			const ref: string = params.reference;
+			const padNum: string = String(params.padNumber);
 
-		const designatorOf = (c: any): string | undefined => {
-			try { if (typeof c?.getState_Designator === 'function') return c.getState_Designator(); } catch {/* */}
-			return c?.designator;
-		};
-		const idOf = (c: any): string | undefined => {
-			try { if (typeof c?.getState_PrimitiveId === 'function') return c.getState_PrimitiveId(); } catch {/* */}
-			return c?.primitiveId;
-		};
-		const padNumberOf = (p: any): string | undefined => {
-			try { if (typeof p?.getState_PadNumber === 'function') return String(p.getState_PadNumber()); } catch {/* */}
-			return p?.padNumber != null ? String(p.padNumber) : undefined;
+			const designatorOf = (c: any): string | undefined => {
+				try { if (typeof c?.getState_Designator === 'function') return c.getState_Designator(); } catch {/* */}
+				return c?.designator;
+			};
+			const idOf = (c: any): string | undefined => {
+				try { if (typeof c?.getState_PrimitiveId === 'function') return c.getState_PrimitiveId(); } catch {/* */}
+				return c?.primitiveId;
+			};
+			const padNumberOf = (p: any): string | undefined => {
+				try { if (typeof p?.getState_PadNumber === 'function') return String(p.getState_PadNumber()); } catch {/* */}
+				return p?.padNumber != null ? String(p.padNumber) : undefined;
+			};
+
+			const components = await eda.pcb_PrimitiveComponent.getAll();
+			const target = (components || []).find((c: any) => designatorOf(c) === ref);
+			if (!target) {
+				throw new Error(`Component with designator "${ref}" not found on PCB.`);
+			}
+			const targetId = idOf(target);
+			if (!targetId) {
+				throw new Error(`Could not resolve primitiveId for component "${ref}".`);
+			}
+			const pads = await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(targetId);
+			const pad = (pads || []).find((p: any) => padNumberOf(p) === padNum);
+			if (!pad) {
+				throw new Error(`Pad ${padNum} not found on component ${ref}.`);
+			}
+			const flat: any = flattenState(pad);
+			const pinScale = await componentPinScale();
+			const readCoord = (axis: 'X' | 'Y', flatName: 'x' | 'y'): number | undefined => {
+				try {
+					const getter = (pad as any)?.[`getState_${axis}`];
+					if (typeof getter === 'function') {
+						const value = getter.call(pad);
+						if (Number.isFinite(value)) return Number(value) * pinScale;
+					}
+				} catch {/* */}
+				return Number.isFinite(flat?.[flatName]) ? Number(flat[flatName]) * pinScale : undefined;
+			};
+			normalizePadShapeUnits(flat);
+			return {
+				...flat,
+				x: readCoord('X', 'x') ?? flat?.x,
+				y: readCoord('Y', 'y') ?? flat?.y,
+				reference: ref,
+				padNumber: padNum,
+				units: 'mil',
+				sourceUnits: componentPinSourceUnits(pinScale),
+			};
 		};
 
-		const components = await eda.pcb_PrimitiveComponent.getAll();
-		const target = (components || []).find((c: any) => designatorOf(c) === ref);
-		if (!target) {
-			throw new Error(`Component with designator "${ref}" not found on PCB.`);
-		}
-		const targetId = idOf(target);
-		if (!targetId) {
-			throw new Error(`Could not resolve primitiveId for component "${ref}".`);
-		}
-		const pads = await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(targetId);
-		const pad = (pads || []).find((p: any) => padNumberOf(p) === padNum);
-		if (!pad) {
-			throw new Error(`Pad ${padNum} not found on component ${ref}.`);
-		}
-		return {
-			...flattenState(pad),
-			reference: ref,
-			padNumber: padNum,
-		};
+		return await awaitPadLookupCommand('pcb.pad.findByRef', lookup(), params);
 	},
 
 	// === Orthogonal (Manhattan) routing — emits real Line primitives ===
@@ -130,26 +189,40 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 		const { net, fromX, fromY, toX, toY, lineWidth } = params;
 		const layer = normalizeLayer(params.layer);
 		const lines: any[] = [];
+		const segments: TraceSegmentSpec[] = [];
+		const addSegment = (startX: number, startY: number, endX: number, endY: number, role: string) => {
+			segments.push({ net, layer, startX, startY, endX, endY, lineWidth, role });
+		};
 
 		if (fromX === toX || fromY === toY) {
-			const a = await eda.pcb_PrimitiveLine.create(net, layer, fromX, fromY, toX, toY, lineWidth);
-			lines.push(a);
+			addSegment(fromX, fromY, toX, toY, 'orthogonal_direct');
 		} else if (params.jogY != null && params.jogY !== fromY && params.jogY !== toY) {
-			const a = await eda.pcb_PrimitiveLine.create(net, layer, fromX, fromY, fromX, params.jogY, lineWidth);
-			const b = await eda.pcb_PrimitiveLine.create(net, layer, fromX, params.jogY, toX, params.jogY, lineWidth);
-			const c = await eda.pcb_PrimitiveLine.create(net, layer, toX, params.jogY, toX, toY, lineWidth);
-			lines.push(a, b, c);
+			addSegment(fromX, fromY, fromX, params.jogY, 'orthogonal_jog');
+			addSegment(fromX, params.jogY, toX, params.jogY, 'orthogonal_jog');
+			addSegment(toX, params.jogY, toX, toY, 'orthogonal_jog');
 		} else if (params.jogX != null && params.jogX !== fromX && params.jogX !== toX) {
-			const a = await eda.pcb_PrimitiveLine.create(net, layer, fromX, fromY, params.jogX, fromY, lineWidth);
-			const b = await eda.pcb_PrimitiveLine.create(net, layer, params.jogX, fromY, params.jogX, toY, lineWidth);
-			const c = await eda.pcb_PrimitiveLine.create(net, layer, params.jogX, toY, toX, toY, lineWidth);
-			lines.push(a, b, c);
+			addSegment(fromX, fromY, params.jogX, fromY, 'orthogonal_jog');
+			addSegment(params.jogX, fromY, params.jogX, toY, 'orthogonal_jog');
+			addSegment(params.jogX, toY, toX, toY, 'orthogonal_jog');
 		} else {
 			const cornerX = toX;
 			const cornerY = fromY;
-			const a = await eda.pcb_PrimitiveLine.create(net, layer, fromX, fromY, cornerX, cornerY, lineWidth);
-			const b = await eda.pcb_PrimitiveLine.create(net, layer, cornerX, cornerY, toX, toY, lineWidth);
-			lines.push(a, b);
+			addSegment(fromX, fromY, cornerX, cornerY, 'orthogonal_corner');
+			addSegment(cornerX, cornerY, toX, toY, 'orthogonal_corner');
+		}
+
+		const dryRun = !!params.dryRun;
+		const obstacleCheck = await enforceTraceObstacles({
+			...params,
+			net,
+			layer,
+			segments,
+			failOnObstacle: dryRun ? false : params.failOnObstacle,
+		});
+		if (!dryRun) {
+			for (const s of segments) {
+				lines.push(await eda.pcb_PrimitiveLine.create(net, layer, s.startX, s.startY, s.endX, s.endY, lineWidth));
+			}
 		}
 
 		const idOf = (l: any): string | undefined => {
@@ -157,7 +230,10 @@ export const pcbPrimitiveHandlers: Record<string, (params: Record<string, any>) 
 			return l?.primitiveId;
 		};
 		return {
-			segmentCount: lines.length,
+			dryRun,
+			segmentCount: dryRun ? segments.length : lines.length,
+			segments,
+			obstacleCheck,
 			primitiveIds: lines.map(idOf).filter(Boolean),
 		};
 	},

@@ -5,9 +5,16 @@ release/
 *.eext
 .mcp.json
 
-# Internal worktree metadata + planning scratchpads
-.claude/
+# Internal worktree metadata + planning scratchpads. The shared Claude Code
+# agents and skills (docs/MULTI-AGENT.md) are part of the project.
+.claude/*
+!.claude/agents/
+!.claude/skills/
 IMPROVEMENT_PLAN.md
 
 # Embeddings cache (generated on first dynamic-toolsets run)
 .cache/
+
+# Router binaries (scripts/install-fastroute.sh, FreeRouting jar)
+/vendor/fastroute/
+/vendor/freerouting.jar

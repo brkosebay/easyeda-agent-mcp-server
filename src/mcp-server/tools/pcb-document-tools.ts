@@ -2,30 +2,31 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WebSocketBridge } from '../bridge';
 
+const DEFAULT_DOCUMENT_QUERY_TIMEOUT_MS = 5_000;
+
+function timeoutPayload(params: Record<string, unknown>): Record<string, unknown> {
+	const timeoutMs = Number((params as any).timeoutMs);
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return { ...params };
+
+	// Forward timeoutMs so the extension handler sees it; _timeoutMs sets the
+	// bridge-side timer with margin so the handler's deadline fires first.
+	return { ...params, _timeoutMs: timeoutMs + 5000 };
+}
+
+// pcb_navigate_to_region and pcb_get_primitives_in_region are registered by
+// registerAnalysisTools; registering them here too would double-register the
+// same tool name.
 export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBridge): void {
 	// === Navigation ===
 
 	server.tool(
-		'pcb_navigate_to_region',
-		'Navigate and zoom the PCB editor viewport to fit a specific region',
-		{
-			left: z.number().describe('Left boundary X'),
-			right: z.number().describe('Right boundary X'),
-			top: z.number().describe('Top boundary Y'),
-			bottom: z.number().describe('Bottom boundary Y'),
-		},
-		async ({ left, right, top, bottom }) => {
-			const result = await bridge.send('pcb.document.navigateToRegion', { left, right, top, bottom });
-			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-		},
-	);
-
-	server.tool(
 		'pcb_zoom_to_board',
 		'Zoom the viewport to fit the entire board outline',
-		{},
-		async () => {
-			const result = await bridge.send('pcb.document.zoomToBoardOutline');
+		{
+			timeoutMs: z.number().int().positive().default(DEFAULT_DOCUMENT_QUERY_TIMEOUT_MS).describe('Maximum wait in milliseconds if renderer is slow.'),
+		},
+		async ({ timeoutMs, ...rest }) => {
+			const result = await bridge.send('pcb.document.zoomToBoardOutline', timeoutPayload({ ...rest, timeoutMs }));
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -34,10 +35,11 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		'pcb_refresh_canvas',
 		'Force a canvas redraw by cycling the ratline calculator and re-zooming. Use when newly created tracks/vias do not visually appear despite being present in API queries — common after batch routing.',
 		{
+			timeoutMs: z.number().int().positive().default(DEFAULT_DOCUMENT_QUERY_TIMEOUT_MS).describe('Maximum wait in milliseconds if renderer is slow.'),
 			zoom: z.boolean().optional().default(true).describe('Also zoom-to-board (default: true)'),
 		},
-		async ({ zoom }) => {
-			const result = await bridge.send('pcb.document.refresh', { zoom });
+		async ({ zoom, timeoutMs, ...rest }) => {
+			const result = await bridge.send('pcb.document.refresh', timeoutPayload({ zoom, ...rest, timeoutMs }));
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -70,34 +72,10 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		{
 			x: z.number().describe('X coordinate'),
 			y: z.number().describe('Y coordinate'),
+			timeoutMs: z.number().int().positive().default(DEFAULT_DOCUMENT_QUERY_TIMEOUT_MS).describe('Maximum wait in milliseconds if query is slow.'),
 		},
-		async ({ x, y }) => {
-			const result = await bridge.send('pcb.document.getPrimitiveAtPoint', { x, y });
-			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-		},
-	);
-
-	server.tool(
-		'pcb_get_primitives_in_region',
-		'Get all primitives within a rectangular region on the PCB',
-		{
-			left: z.number().describe('Left boundary X'),
-			right: z.number().describe('Right boundary X'),
-			top: z.number().describe('Top boundary Y'),
-			bottom: z.number().describe('Bottom boundary Y'),
-			leftToRight: z
-				.boolean()
-				.optional()
-				.describe('Selection mode: true=must be fully inside, false=intersecting also counts'),
-		},
-		async ({ left, right, top, bottom, leftToRight }) => {
-			const result = await bridge.send('pcb.document.getPrimitivesInRegion', {
-				left,
-				right,
-				top,
-				bottom,
-				leftToRight,
-			});
+		async ({ x, y, timeoutMs }) => {
+			const result = await bridge.send('pcb.document.getPrimitiveAtPoint', timeoutPayload({ x, y, timeoutMs }));
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -179,6 +157,21 @@ export function registerPcbDocumentTools(server: McpServer, bridge: WebSocketBri
 		},
 		async ({ primitiveIds }) => {
 			const result = await bridge.send('pcb.get.component', { primitiveIds });
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'pcb_get_component',
+		'Find a PCB footprint by designator (e.g. "U5"): primitiveId, x, y (mil), rotation, layer, lock state and its pads (number, net, position in mil). Use the primitiveId with pcb_move_component / pcb_modify_component.',
+		{
+			designator: z.string().describe('Component designator, e.g. "U5"'),
+			includePads: z.boolean().optional().describe('Include the pad list (default true)'),
+			instance_id: z.string().optional(),
+			document: z.string().optional().describe('PCB document UUID (default: active tab)'),
+		},
+		async (params) => {
+			const result = await bridge.send('pcb.component.findByDesignator', params);
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);

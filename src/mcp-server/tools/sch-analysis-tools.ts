@@ -53,7 +53,8 @@ interface DesignSnapshot {
 	netCount: number;
 	components: Record<string, ComponentInfo>;
 	nets: Record<string, NetInfo>;
-	pinIndex: PinRef[];
+	/** Not read by any analyzer; dropped from sch_extract_design output unless requested. */
+	pinIndex?: PinRef[];
 	stats: {
 		byClass: Record<string, number>;
 		passiveByValue: { resistors: number; capacitors: number; inductors: number };
@@ -568,18 +569,291 @@ function analyzeEsdCoverage(snap: DesignSnapshot): EsdReport {
 }
 
 // ---------------------------------------------------------------------------
+// Component-context inference: turn the raw {pin: net} map for one part
+// into "what is this component DOING here?" — pull-up to +3.3V, decoupling
+// on +5V, series resistor between U3.3V and the ESP32 EN, etc.
+
+interface ExplainedPin {
+	pinNumber: string;
+	pinName: string;
+	net: string;
+	role?: string; // pull_up | pull_down | decoupling | series | divider_top | ...
+	connectsTo: string[]; // sibling component pins on the same net (e.g. ["U3.EN", "+3.3V"])
+}
+
+interface ComponentExplanation {
+	designator: string;
+	deviceClass?: string;
+	mpn?: string;
+	value?: string;
+	footprint?: string;
+	role: string; // one-liner inferred role
+	pins: ExplainedPin[];
+	notes: string[];
+}
+
+function siblingsOnNet(snap: DesignSnapshot, net: string, excludeDes: string): Array<{ designator: string; pinNumber: string; pinName: string }> {
+	const members = snap.nets[net]?.members ?? [];
+	return members.filter((m) => m.designator !== excludeDes);
+}
+
+function labelMember(m: { designator: string; pinNumber: string; pinName: string }): string {
+	return m.pinName ? `${m.designator}.${m.pinName}` : `${m.designator}.${m.pinNumber}`;
+}
+
+function explainComponent(snap: DesignSnapshot, designator: string): ComponentExplanation {
+	const comp = snap.components[designator];
+	if (!comp) {
+		return { designator, role: 'NOT FOUND', pins: [], notes: [`No component named "${designator}" in this project.`] };
+	}
+	const nets = snap.nets;
+	const groundNetNames = new Set(Object.values(nets).filter((n) => n.isGround).map((n) => n.name));
+	const powerNetNames = new Set(Object.values(nets).filter((n) => n.isPower).map((n) => n.name));
+
+	const pins: ExplainedPin[] = [];
+	for (const [pinNumber, pin] of Object.entries(comp.pins || {})) {
+		const sibs = siblingsOnNet(snap, pin.net, designator);
+		pins.push({
+			pinNumber,
+			pinName: pin.name,
+			net: pin.net,
+			connectsTo: sibs.map(labelMember).slice(0, 8), // cap to keep response compact
+		});
+	}
+
+	const notes: string[] = [];
+	let role = `${comp.deviceClass ?? 'component'} ${comp.value ?? comp.mpn ?? ''}`.trim();
+
+	// Two-pin passive heuristics — covers ~80% of "what is this resistor/cap for"
+	const pinList = Object.values(comp.pins || {});
+	if (pinList.length === 2 && comp.deviceClass === 'resistor') {
+		const [a, b] = pinList;
+		const aGnd = groundNetNames.has(a.net);
+		const bGnd = groundNetNames.has(b.net);
+		const aPwr = powerNetNames.has(a.net);
+		const bPwr = powerNetNames.has(b.net);
+
+		if ((aPwr && !bPwr && !bGnd) || (bPwr && !aPwr && !aGnd)) {
+			const railNet = aPwr ? a.net : b.net;
+			const sigNet = aPwr ? b.net : a.net;
+			const sigSibs = siblingsOnNet(snap, sigNet, designator);
+			const target = sigSibs[0] ? labelMember(sigSibs[0]) : sigNet;
+			role = `pull-up ${comp.value ?? ''} on ${target} → ${railNet}`.trim();
+			pins[0].role = 'pull_up';
+		} else if ((aGnd && !bGnd && !bPwr) || (bGnd && !aGnd && !aPwr)) {
+			const sigNet = aGnd ? b.net : a.net;
+			const sigSibs = siblingsOnNet(snap, sigNet, designator);
+			const target = sigSibs[0] ? labelMember(sigSibs[0]) : sigNet;
+			role = `pull-down ${comp.value ?? ''} on ${target} → GND`.trim();
+			pins[0].role = 'pull_down';
+		} else if (aPwr && bGnd) {
+			role = `bleeder/load resistor ${comp.value ?? ''} between ${a.net} and ${b.net}`;
+		} else if (!aPwr && !bPwr && !aGnd && !bGnd) {
+			// Both ends on signal nets — series element. Identify driver/load.
+			const aSibs = siblingsOnNet(snap, a.net, designator);
+			const bSibs = siblingsOnNet(snap, b.net, designator);
+			const aLabel = aSibs[0] ? labelMember(aSibs[0]) : a.net;
+			const bLabel = bSibs[0] ? labelMember(bSibs[0]) : b.net;
+			role = `series ${comp.value ?? ''} between ${aLabel} and ${bLabel}`.trim();
+		}
+	}
+
+	if (pinList.length === 2 && comp.deviceClass === 'capacitor') {
+		const [a, b] = pinList;
+		const aGnd = groundNetNames.has(a.net);
+		const bGnd = groundNetNames.has(b.net);
+		const aPwr = powerNetNames.has(a.net);
+		const bPwr = powerNetNames.has(b.net);
+
+		if ((aPwr && bGnd) || (bPwr && aGnd)) {
+			const rail = aPwr ? a.net : b.net;
+			role = `decoupling ${comp.value ?? ''} on ${rail}`.trim();
+			pins[0].role = 'decoupling';
+		} else if (aGnd || bGnd) {
+			const sigNet = aGnd ? b.net : a.net;
+			const sigSibs = siblingsOnNet(snap, sigNet, designator);
+			const target = sigSibs[0] ? labelMember(sigSibs[0]) : sigNet;
+			role = `bypass/filter ${comp.value ?? ''} on ${target} → GND`.trim();
+		} else {
+			// Both ends on signal nets — AC coupling / DC blocking / feedback
+			const aSibs = siblingsOnNet(snap, a.net, designator);
+			const bSibs = siblingsOnNet(snap, b.net, designator);
+			const aLabel = aSibs[0] ? labelMember(aSibs[0]) : a.net;
+			const bLabel = bSibs[0] ? labelMember(bSibs[0]) : b.net;
+			role = `series cap ${comp.value ?? ''} between ${aLabel} and ${bLabel} (AC coupling / feedback)`.trim();
+		}
+	}
+
+	if (comp.deviceClass === 'tvs' || comp.deviceClass === 'zener') {
+		const protectedNets = pinList.map((p) => p.net).filter((n) => !groundNetNames.has(n));
+		role = `${comp.deviceClass.toUpperCase()} ${comp.mpn ?? ''} clamping ${protectedNets.join(' / ') || 'unknown net'} to GND`.trim();
+	}
+
+	if (comp.deviceClass === 'fuse' || comp.deviceClass === 'ptc') {
+		const railPin = pinList.find((p) => powerNetNames.has(p.net));
+		role = `${comp.deviceClass.toUpperCase()} ${comp.mpn ?? ''} on ${railPin?.net ?? 'unknown rail'}`.trim();
+	}
+
+	if (comp.deviceClass?.startsWith('regulator')) {
+		const outPin = Object.entries(comp.pins || {}).find(([, p]) => /^V?OUT|^SW$|^LX$/i.test(p.name || ''));
+		const inPin = Object.entries(comp.pins || {}).find(([, p]) => /^V?IN|^INPUT/i.test(p.name || ''));
+		role = `${comp.deviceClass.replace('regulator_', '').toUpperCase()} regulator ${comp.mpn ?? ''}: ${inPin?.[1].net ?? '?'} → ${outPin?.[1].net ?? '?'}`.trim();
+	}
+
+	if (comp.deviceClass === 'ic' && pinList.length > 4) {
+		// Big IC — note rails it touches and how many signals.
+		const railsTouched = new Set<string>();
+		const groundsTouched = new Set<string>();
+		let signalPins = 0;
+		for (const p of pinList) {
+			if (powerNetNames.has(p.net)) railsTouched.add(p.net);
+			else if (groundNetNames.has(p.net)) groundsTouched.add(p.net);
+			else if (p.net) signalPins += 1;
+		}
+		role = `IC ${comp.mpn ?? ''} (${pinList.length} pins): ${signalPins} signals, rails [${[...railsTouched].join(', ')}], ${groundsTouched.size} ground pins`.trim();
+	}
+
+	// $-net warning — agents often misread these as garbage.
+	const dollarPins = pinList.filter((p) => p.net.startsWith('$'));
+	if (dollarPins.length > 0) {
+		notes.push(`${dollarPins.length} pin(s) sit on auto-named ($-prefixed) nets — these are real electrical connections, just unlabeled by the designer. The "connectsTo" lists show what's actually wired.`);
+	}
+
+	return {
+		designator,
+		deviceClass: comp.deviceClass,
+		mpn: comp.mpn,
+		value: comp.value,
+		footprint: comp.footprint,
+		role,
+		pins,
+		notes,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Net trace: drivers / loads / passives in series / pages spanned. The
+// agent-friendly view of "what is this signal?".
+
+interface NetTrace {
+	net: string;
+	memberCount: number;
+	isPower: boolean;
+	isGround: boolean;
+	autoNamed: boolean;
+	semanticAlias?: string; // e.g. "FB@U1" for a $-net touching a pin named FB
+	drivers: Array<{ designator: string; pinNumber: string; pinName: string; reason: string }>;
+	loads: Array<{ designator: string; pinNumber: string; pinName: string }>;
+	passives: Array<{ designator: string; deviceClass: string; value?: string; otherNet: string }>;
+	pages?: string[]; // populated only when the snapshot includes per-page data
+	allMembers: string[];
+}
+
+const DRIVER_PIN_RE = /^V?OUT|^SW$|^LX$|^TX$|^MISO$|^SDO$|^SCL$|^SDA$|^DOUT$|^OUT_/i;
+
+function traceNet(snap: DesignSnapshot, netName: string): NetTrace {
+	const net = snap.nets[netName];
+	if (!net) {
+		return {
+			net: netName,
+			memberCount: 0,
+			isPower: false,
+			isGround: false,
+			autoNamed: netName.startsWith('$'),
+			drivers: [],
+			loads: [],
+			passives: [],
+			allMembers: [],
+		};
+	}
+
+	const drivers: NetTrace['drivers'] = [];
+	const loads: NetTrace['loads'] = [];
+	const passives: NetTrace['passives'] = [];
+	let semanticAlias: string | undefined;
+
+	for (const m of net.members) {
+		const comp = snap.components[m.designator];
+		if (!comp) continue;
+		// Track the most informative pin name — typically the one nearest
+		// to a function on an IC. Used as the alias for $-prefixed nets.
+		if (net.autoNamed && m.pinName && /^[A-Z]/.test(m.pinName) && !semanticAlias) {
+			semanticAlias = `${m.pinName}@${m.designator}`;
+		}
+
+		if (comp.deviceClass?.startsWith('regulator') && /^V?OUT|^SW$|^LX$/i.test(m.pinName)) {
+			drivers.push({ designator: m.designator, pinNumber: m.pinNumber, pinName: m.pinName, reason: `${comp.deviceClass.replace('regulator_', '')} regulator output` });
+			continue;
+		}
+		if (comp.deviceClass === 'ic' && DRIVER_PIN_RE.test(m.pinName)) {
+			drivers.push({ designator: m.designator, pinNumber: m.pinNumber, pinName: m.pinName, reason: `IC output pin (${m.pinName})` });
+			continue;
+		}
+		if (comp.deviceClass === 'fuse' || comp.deviceClass === 'ptc') {
+			drivers.push({ designator: m.designator, pinNumber: m.pinNumber, pinName: m.pinName, reason: `protection element passing rail` });
+			continue;
+		}
+		if (comp.deviceClass === 'resistor' || comp.deviceClass === 'capacitor' || comp.deviceClass === 'inductor' || comp.deviceClass === 'ferrite_bead') {
+			const otherPin = Object.values(comp.pins || {}).find((p) => p.net !== netName);
+			passives.push({
+				designator: m.designator,
+				deviceClass: comp.deviceClass,
+				value: comp.value,
+				otherNet: otherPin?.net ?? '(unknown)',
+			});
+			continue;
+		}
+		// Default: treat as load
+		loads.push({ designator: m.designator, pinNumber: m.pinNumber, pinName: m.pinName });
+	}
+
+	return {
+		net: netName,
+		memberCount: net.members.length,
+		isPower: net.isPower,
+		isGround: net.isGround,
+		autoNamed: net.autoNamed,
+		semanticAlias,
+		drivers,
+		loads,
+		passives,
+		allMembers: net.members.map(labelMember),
+	};
+}
+
+// Agent-facing shape of sch_extract_design. Connectivity is already in
+// components[].pins and nets[].members; the flat pinIndex repeats it (~14% of
+// the payload) and no analyzer reads it, so it ships only on request.
+// Analyzers fetch sch.extract.design themselves and keep the full snapshot.
+export function projectSchSnapshot(result: any, fields?: string[]): any {
+	if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+	if (Array.isArray(fields) && fields.length > 0) {
+		const out: Record<string, any> = {};
+		for (const f of fields) if (f in result) out[f] = result[f];
+		out._availableFields = Object.keys(result);
+		return out;
+	}
+	const { pinIndex, ...rest } = result;
+	return rest;
+}
+
+// ---------------------------------------------------------------------------
 // MCP tool registration
 
 export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBridge): void {
 	server.tool(
 		'sch_extract_design',
-		'One-shot snapshot of the active project: components (with MPN/value/footprint/position/deviceClass), nets (with members + power/ground tagging), pin index, and stats. Foundation for analyze_* tools — call once and pass the result around if you have one.',
+		'One-shot snapshot of the active project: components (with MPN/value/footprint/position/deviceClass and pins → net), nets (with members + power/ground tagging), and stats. Foundation for analyze_* tools — call once and pass the result around if you have one. The flat pinIndex (same connectivity a third time) is omitted unless named in fields.',
 		withDocumentParam({
 			allPages: z.boolean().optional().default(true).describe('Include components from every schematic page (default true)'),
+			fields: z
+				.array(z.string())
+				.optional()
+				.describe('Project the snapshot to these top-level keys only (e.g. ["nets","netCount"]; add "pinIndex" for the flat pin list). Analyzers need components + nets — pass them an unprojected snapshot.'),
 		}),
-		async (params) => {
+		async ({ fields, ...params }) => {
 			const result = await bridge.send('sch.extract.design', { ...params, _timeoutMs: 120_000 });
-			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(projectSchSnapshot(result, fields)) }] };
 		},
 	);
 
@@ -657,6 +931,46 @@ export function registerSchAnalysisTools(server: McpServer, bridge: WebSocketBri
 		async ({ snapshot, ...rest }) => {
 			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
 			const result = analyzeEsdCoverage(snap as DesignSnapshot);
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'sch_get_pages',
+		`Lightweight orientation tool: lists every schematic page in the project (UUID, title, sheet order, isActive). Call this FIRST when starting work on a multi-page project — much cheaper than sch_extract_design and tells you which page UUIDs you can hand to other tools.`,
+		{},
+		async () => {
+			const result = await bridge.send('editor.sch.pages', {});
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'sch_explain_component',
+		`Semantic role inference for ONE component. Returns "what is this part doing here" — pull-up, pull-down, decoupling, series, divider, regulator I/O, TVS clamp, etc. — plus a per-pin breakdown showing exactly which sibling pins each pin connects to (e.g. "U3.EN", "+3.3V"). This is the fastest way to make sense of a component WITHOUT reading the schematic visually.
+Use whenever an agent needs to answer "what is R19 for?" or "is this cap in the right place?". Cross-page connections are included automatically — the project-wide netlist is the source of truth.`,
+		withDocumentParam({
+			designator: z.string().describe('Component designator (e.g. "U3", "R19", "C24")'),
+			snapshot: z.any().optional().describe('Pre-fetched snapshot from sch_extract_design (skip the round-trip)'),
+		}),
+		async ({ snapshot, designator, ...rest }) => {
+			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
+			const result = explainComponent(snap as DesignSnapshot, designator);
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'sch_trace_net',
+		`Trace ONE signal across the entire project: drivers (regulator outputs, IC output pins, fuses), loads (input pins), passives in series (R/C/L between this net and another), and a semanticAlias hint when the net is auto-named ($-prefixed) but actually corresponds to a function pin like FB or EN.
+Use this when an agent asks "what's on this net?" or "where does this signal go?" — especially for a multi-page schematic where the named net (e.g. +3.3V, CAN_RX) crosses sheet boundaries. Project-wide; no per-page filtering needed.`,
+		withDocumentParam({
+			net: z.string().describe('Net name (e.g. "+3.3V", "CAN_RX", "$1N2856"). Use the exact name from sch_extract_design or sch_get_connectivity.'),
+			snapshot: z.any().optional().describe('Pre-fetched snapshot from sch_extract_design'),
+		}),
+		async ({ snapshot, net, ...rest }) => {
+			const snap = snapshot ?? (await bridge.send('sch.extract.design', { ...rest, _timeoutMs: 120_000 }));
+			const result = traceNet(snap as DesignSnapshot, net);
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);

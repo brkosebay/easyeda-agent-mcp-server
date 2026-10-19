@@ -1,12 +1,12 @@
 {
 	"name": "easyeda-agent-mcp-server",
 	"uuid": "0d3d35b927d9451ba42c527576079161",
-	"displayName": "EasyEDA Agent",
-	"description": "MCP Bridge - Connect Claude Code to EasyEDA Pro",
-	"version": "1.7.2",
+	"displayName": "EasyEDA Agent v2",
+	"description": "MCP Bridge: native copper, verified routing and pairs, layers, split pours",
+	"version": "2.1.21",
 	"publisher": "",
 	"engines": {
-		"eda": "^2.3.0"
+		"eda": ">=2.3.0"
 	},
 	"license": "MIT",
 	"repository": {
@@ -14,7 +14,12 @@
 		"url": ""
 	},
 	"categories": "Other",
-	"keywords": ["MCP", "Claude", "PCB", "Optimizer"],
+	"keywords": [
+		"MCP",
+		"Claude",
+		"PCB",
+		"Optimizer"
+	],
 	"images": {
 		"logo": "./images/logo.png"
 	},
@@ -41,6 +46,11 @@
 						"id": "About",
 						"title": "About...",
 						"registerFn": "about"
+					},
+					{
+						"id": "ConfigureNativeDaemon",
+						"title": "Configure protected bridge...",
+						"registerFn": "configureNativeDaemon"
 					}
 				]
 			}
@@ -64,6 +74,11 @@
 						"id": "About",
 						"title": "About...",
 						"registerFn": "about"
+					},
+					{
+						"id": "ConfigureNativeDaemon",
+						"title": "Configure protected bridge...",
+						"registerFn": "configureNativeDaemon"
 					}
 				]
 			}

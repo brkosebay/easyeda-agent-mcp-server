@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {parsePhysicalValue as parse} from '../src/extension/handlers/passive-value';
+for(const part of ['CC0805JRNPO9BN100','CL31B106KBHNNNE','0805W8F1004T5E']) assert.equal(parse(part,'F'),undefined);
+assert.equal(parse('50V','F',true),undefined);
+assert.equal(parse('100','F'),undefined);
+assert.equal(parse('0805','Ω',true),undefined);
+assert.equal(parse('100n','F',true),100*1e-9);
+assert.ok(Math.abs(parse('100nF_50V_X7R','F')! / 1e-7 - 1) < 1e-12);
+assert.equal(parse('4.7µF','F'),4.7e-6);
+assert.equal(parse('CD73-2R2M 2.2UH','H'),2.2e-6);
+assert.equal(parse('10k','Ω',true),10000);
+assert.equal(parse('1MΩ','Ω'),1e6);
+assert.equal(parse('1mΩ','Ω'),1e-3);
+assert.equal(parse('10KOHM','Ω'),10000);
+assert.equal(parse('100uF','H'),undefined);
+console.log('Physical value parser: embedded MPN digits and wrong units rejected; SI units/case and explicit values passed.');

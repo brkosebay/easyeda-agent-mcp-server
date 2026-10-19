@@ -4,25 +4,125 @@ import type { WebSocketBridge } from '../bridge';
 import { withDocumentParam } from './query-params';
 
 export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge): void {
+	// Schematic writes that hit `eda.sch_PrimitiveComponent.create` etc. typically
+	// take 1–3 s on a healthy session, but tab-switching between schematic pages,
+	// EasyEDA modal dialogs (e.g. multi-part subPartName prompt), or write-lock
+	// contention can push them past the agent's MCP-level timeout. We surface
+	// a clean bridge timeout at 30 s for single ops and 60 s for batch — long
+	// enough for legitimate slow runs, short enough that the agent gets a
+	// useful error before its own timeout fires.
+	const SCH_WRITE_TIMEOUT_MS = 30_000;
+	const SCH_WRITE_BATCH_TIMEOUT_MS = 60_000;
+
+	// One frame for every schematic tool: component / net flag / net port
+	// positions use the same X/Y frame as sch_get_all_wires and
+	// sch_get_pin_position, so values can be copied between tools. (EasyEDA's
+	// own component API reports Y inverted; the extension converts.)
+	const FRAME_NOTE = 'Coordinates use the same frame as sch_get_all_wires / sch_get_pin_position (copy values between them directly).';
+	const coordinateFrame = z
+		.enum(['canvas', 'api'])
+		.optional()
+		.describe('Advanced: "canvas" (default) = same frame as wires/pins; "api" = raw EasyEDA component frame (Y inverted on EasyEDA Pro 2.2).');
+
+	function validateLibraryComponent(c: any, ctx: string): void {
+		if (!c || typeof c !== 'object') {
+			throw new Error(`${ctx}: missing component object. Pass the full library device object from lib_search_device or lib_get_device_by_lcsc.`);
+		}
+		const required = ['uuid', 'libraryUuid', 'symbolUuid'] as const;
+		const missing = required.filter((k) => typeof c[k] !== 'string' || !c[k].trim());
+		if (missing.length) {
+			throw new Error(`${ctx}: component object is missing ${missing.join(', ')}. Use lib_search_device / lib_get_device_by_lcsc and pass the FULL returned object.`);
+		}
+	}
+
+	const componentBatchItemSchema = z.object({
+		component: z.record(z.string(), z.any()).describe('Full library component object (uuid, symbolUuid, footprintUuid, libraryUuid)'),
+		x: z.number(),
+		y: z.number(),
+		subPartName: z.string().optional(),
+		rotation: z.number().optional(),
+		mirror: z.boolean().optional(),
+		addIntoBom: z.boolean().optional(),
+		addIntoPcb: z.boolean().optional(),
+	});
+
 	server.tool(
 		'sch_create_component',
-		'Create a schematic component from a library device reference. Use lib_search_device or lib_get_device_by_lcsc first to get the component object. IMPORTANT: The component object must include uuid, symbolUuid, footprintUuid, AND libraryUuid — passing only {deviceUuid, libraryUuid} will fail with a validation error. Pass the full object returned by lib_get_device_by_lcsc with libraryUuid added (from lib_get_system_library_uuid).',
+		`Create one or more schematic components from a library device reference. Use lib_search_device or lib_get_device_by_lcsc first to get the component object.
+IMPORTANT: The component object must include uuid, symbolUuid, footprintUuid, AND libraryUuid — passing only {deviceUuid, libraryUuid} will fail with a validation error. Pass the full object returned by lib_get_device_by_lcsc with libraryUuid added (from lib_get_system_library_uuid).
+For placing multiple components in one call (e.g. 8 decoupling caps), pass \`batch: [{component, x, y, ...}, ...]\` instead of the individual params. Each placement takes ~1.5s so batch saves real wall-clock time.`,
 		withDocumentParam({
 			component: z
 				.record(z.string(), z.any())
+				.optional()
 				.describe(
-					'Full component object including uuid, symbolUuid, footprintUuid, and libraryUuid. Get the base object from lib_get_device_by_lcsc or lib_search_device, then add libraryUuid from lib_get_system_library_uuid. Passing only {deviceUuid, libraryUuid} will fail.',
+					'Full component object including uuid, symbolUuid, footprintUuid, and libraryUuid (single placement).',
 				),
-			x: z.number().describe('X coordinate for placement (X axis points rightward — higher values = further right)'),
-			y: z.number().describe('Y coordinate for placement (Y axis points upward — higher values = higher on screen)'),
+			x: z.number().optional().describe(`X coordinate (single placement). ${FRAME_NOTE}`),
+			y: z.number().optional().describe(`Y coordinate (single placement). ${FRAME_NOTE}`),
+			coordinateFrame,
 			subPartName: z.string().optional().describe('Sub-part name for multi-part components'),
 			rotation: z.number().optional().describe('Rotation angle in degrees'),
 			mirror: z.boolean().optional().describe('Whether to mirror the component'),
 			addIntoBom: z.boolean().optional().describe('Whether to include in BOM (default true)'),
 			addIntoPcb: z.boolean().optional().describe('Whether to include in PCB (default true)'),
+			batch: z
+				.array(componentBatchItemSchema)
+				.max(20)
+				.optional()
+				.describe('Array of components to place in one call (max 20). When provided, the individual params above are ignored.'),
 		}),
 		async (params) => {
-			const result = await bridge.send('sch.component.create', params);
+			if (Array.isArray(params.batch) && params.batch.length > 0) {
+				for (let i = 0; i < params.batch.length; i++) {
+					validateLibraryComponent(params.batch[i].component, `sch_create_component.batch[${i}].component`);
+				}
+				const result = await bridge.send('sch.component.createBatch', { ...params, _timeoutMs: SCH_WRITE_BATCH_TIMEOUT_MS });
+				return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+			}
+			validateLibraryComponent(params.component, 'sch_create_component.component');
+			if (typeof params.x !== 'number' || typeof params.y !== 'number') {
+				throw new Error('sch_create_component: x and y are required for single placement.');
+			}
+			const result = await bridge.send('sch.component.create', { ...params, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'sch_get_pin_position',
+		`Resolve a pin reference to its schematic-page coordinates plus net assignment. Pass {designator, pinNumber} where pinNumber may be the numeric pin number ("3") OR the human-readable pin name ("EN"). Returns {x, y, rotation, net, pinPrimitiveId, componentPrimitiveId}.
+This is the foundational lookup for any "wire two pins together" workflow — call this first to know exactly where to place wire endpoints. For the common case of "just wire pin A to pin B" use sch_wire_pins instead, which resolves coordinates and routes the path in one call.`,
+		withDocumentParam({
+			designator: z.string().describe('Component designator (e.g. "U3", "R19")'),
+			pinNumber: z.string().describe('Pin number ("3") or pin name ("EN", "VCC", "GND")'),
+		}),
+		async (params) => {
+			const result = await bridge.send('sch.component.findPin', { ...params, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
+			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+		},
+	);
+
+	server.tool(
+		'sch_wire_pins',
+		`Connect two pins with a wire. Resolves both pin positions automatically, lays a single-corner Manhattan path between them, and creates one wire primitive.
+Pin references can be strings ("U3.EN", "R19.2") or objects ({designator, pinNumber}). Pin name OR pin number both work.
+The wire's net is inferred from the pins — if both already share the same net it's reused, otherwise pass \`net\` explicitly. Use \`cornerAxis\` to control routing: "h" (horizontal first, default), "v" (vertical first), or "auto" (shortest).`,
+		withDocumentParam({
+			from: z.union([z.string(), z.object({ designator: z.string(), pinNumber: z.string() })])
+				.describe('Source pin: "U3.EN" / "U3.3" / {designator, pinNumber}'),
+			to: z.union([z.string(), z.object({ designator: z.string(), pinNumber: z.string() })])
+				.describe('Destination pin: "R19.2" / "R19.1" / {designator, pinNumber}'),
+			net: z.string().optional().describe('Net name to assign (auto-inferred when both pins share a net)'),
+			cornerAxis: z.enum(['h', 'v', 'auto']).optional().describe('Path bend direction: "h"=horizontal-first (default), "v"=vertical-first, "auto"=shortest'),
+			color: z.string().nullable().optional(),
+			lineWidth: z.number().nullable().optional(),
+			lineType: z.enum(['0', '1', '2', '3']).optional().describe('0=Solid, 1=Dashed, 2=Dotted, 3=DotDashed'),
+		}),
+		async ({ lineType, instance_id, document, ...rest }) => {
+			const params: Record<string, any> = { ...rest, instance_id, document, _timeoutMs: SCH_WRITE_TIMEOUT_MS };
+			if (lineType !== undefined) params.lineType = Number(lineType);
+			const result = await bridge.send('sch.wire.pins', params);
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -32,8 +132,8 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 			.enum(['Power', 'Ground', 'AnalogGround', 'ProtectGround'])
 			.describe('Net flag type'),
 		net: z.string().describe('Net name (e.g. "VCC", "GND", "3V3")'),
-		x: z.number().describe('X coordinate (X axis points rightward — higher values = further right)'),
-		y: z.number().describe('Y coordinate (Y axis points upward — higher values = higher on screen)'),
+		x: z.number().describe(`X coordinate. ${FRAME_NOTE}`),
+		y: z.number().describe(`Y coordinate. ${FRAME_NOTE}`),
 		rotation: z.number().optional().describe('Rotation angle in degrees'),
 		mirror: z.boolean().optional().describe('Whether to mirror'),
 		component: z
@@ -44,7 +144,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 
 	server.tool(
 		'sch_create_net_flag',
-		'Create one or more Power/Ground/AnalogGround/ProtectGround net flags in the schematic. Pass individual parameters for a single flag, or use "batch" array for multiple flags in one call.',
+		`Create one or more Power/Ground/AnalogGround/ProtectGround net flags in the schematic. Pass individual parameters for a single flag, or use "batch" array for multiple flags in one call. The flag symbol is EasyEDA's own default (resolved from the system library); \`component\` is only needed for a custom symbol. ${FRAME_NOTE} List/move/delete flags with sch_list_net_symbols, sch_modify_component and sch_delete_component.`,
 		withDocumentParam({
 			identification: z
 				.enum(['Power', 'Ground', 'AnalogGround', 'ProtectGround'])
@@ -59,6 +159,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.object({ libraryUuid: z.string(), uuid: z.string() })
 				.optional()
 				.describe('Library device reference override'),
+			coordinateFrame,
 			batch: z
 				.array(netFlagItemSchema)
 				.max(10)
@@ -66,7 +167,8 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.describe('Array of net flags to create in one call (max 10 — each takes ~1.5s). When provided, the individual parameters above are ignored.'),
 		}),
 		async (params) => {
-			const result = await bridge.send('sch.component.createNetFlag', params);
+			const t = Array.isArray(params.batch) && params.batch.length > 1 ? SCH_WRITE_BATCH_TIMEOUT_MS : SCH_WRITE_TIMEOUT_MS;
+			const result = await bridge.send('sch.component.createNetFlag', { ...params, _timeoutMs: t });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -74,8 +176,8 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 	const netPortItemSchema = z.object({
 		direction: z.enum(['IN', 'OUT', 'BI']).describe('Port direction'),
 		net: z.string().describe('Net name'),
-		x: z.number().describe('X coordinate'),
-		y: z.number().describe('Y coordinate'),
+		x: z.number().describe(`X coordinate. ${FRAME_NOTE}`),
+		y: z.number().describe(`Y coordinate. ${FRAME_NOTE}`),
 		rotation: z.number().optional().describe('Rotation angle in degrees'),
 		mirror: z.boolean().optional().describe('Whether to mirror'),
 		component: z
@@ -86,7 +188,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 
 	server.tool(
 		'sch_create_net_port',
-		'Create one or more IN/OUT/BI directional net ports in the schematic. Pass individual parameters for a single port, or use "batch" array for multiple ports in one call.',
+		`Create one or more IN/OUT/BI directional net ports in the schematic. Pass individual parameters for a single port, or use "batch" array for multiple ports in one call. The port symbol is EasyEDA's own default; \`component\` is only needed for a custom symbol. ${FRAME_NOTE} List/move/delete ports with sch_list_net_symbols, sch_modify_component and sch_delete_component.`,
 		withDocumentParam({
 			direction: z.enum(['IN', 'OUT', 'BI']).optional().describe('Port direction (for single creation)'),
 			net: z.string().optional().describe('Net name (for single creation)'),
@@ -98,6 +200,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.object({ libraryUuid: z.string(), uuid: z.string() })
 				.optional()
 				.describe('Library device reference override'),
+			coordinateFrame,
 			batch: z
 				.array(netPortItemSchema)
 				.max(10)
@@ -105,32 +208,34 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.describe('Array of net ports to create in one call (max 10 — each takes ~1.5s). When provided, the individual parameters above are ignored.'),
 		}),
 		async (params) => {
-			const result = await bridge.send('sch.component.createNetPort', params);
+			const t = Array.isArray(params.batch) && params.batch.length > 1 ? SCH_WRITE_BATCH_TIMEOUT_MS : SCH_WRITE_TIMEOUT_MS;
+			const result = await bridge.send('sch.component.createNetPort', { ...params, _timeoutMs: t });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
 	server.tool(
 		'sch_delete_component',
-		'Delete one or more schematic components by their primitive IDs',
+		'Delete one or more schematic components by their primitive IDs. Also deletes net flags and net ports (find their IDs with sch_list_net_symbols).',
 		withDocumentParam({
 			ids: z
 				.union([z.string(), z.array(z.string())])
 				.describe('Single primitive ID or array of primitive IDs to delete'),
 		}),
 		async (params) => {
-			const result = await bridge.send('sch.component.delete', params);
+			const result = await bridge.send('sch.component.delete', { ...params, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
 	server.tool(
 		'sch_modify_component',
-		'Modify properties of a schematic component (position, rotation, designator, etc.)',
+		`Modify a schematic component, net flag or net port. Only the fields you pass change: position, rotation, mirror, BOM/PCB flags, text fields and custom properties are all preserved otherwise (the extension works around EasyEDA's modify() which overwrote supplierId and blanked custom properties). The result is read back; if EasyEDA moved the part (seen with rotation+mirror) it is corrected, and \`corrections\`/\`warnings\` report what happened. Use \`net\` to rename a net flag/port. ${FRAME_NOTE}`,
 		withDocumentParam({
-			primitiveId: z.string().describe('The component primitive ID'),
+			primitiveId: z.string().describe('The component / net flag / net port primitive ID'),
 			x: z.number().optional().describe('New X coordinate'),
 			y: z.number().optional().describe('New Y coordinate'),
+			coordinateFrame,
 			rotation: z.number().optional().describe('New rotation angle in degrees'),
 			mirror: z.boolean().optional().describe('Whether to mirror'),
 			addIntoBom: z.boolean().optional().describe('Whether to include in BOM'),
@@ -142,27 +247,32 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 			manufacturerId: z.string().nullable().optional().describe('Manufacturer part number'),
 			supplier: z.string().nullable().optional().describe('Supplier name'),
 			supplierId: z.string().nullable().optional().describe('Supplier part number (e.g. LCSC C-number)'),
+			net: z.string().optional().describe('Net flag / net port only: new net name'),
+			otherProperty: z
+				.record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+				.optional()
+				.describe('Custom properties to set/overwrite; properties not listed are kept'),
 		}),
-		async ({ primitiveId, instance_id, document, ...property }) => {
-			const result = await bridge.send('sch.component.modify', { primitiveId, property, instance_id, document });
+		async ({ primitiveId, instance_id, document, coordinateFrame: frame, ...property }) => {
+			const result = await bridge.send('sch.component.modify', { primitiveId, property, coordinateFrame: frame, instance_id, document, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
 	server.tool(
 		'sch_create_wire',
-		'Create a wire in the schematic defined by a series of coordinate points',
+		'Create a wire in the schematic defined by a series of coordinate points. `line` may be a flat polyline [x1,y1,x2,y2,...], point pairs [[x1,y1],[x2,y2],...] (joined into one polyline), or several connected flat polylines [[x1,y1,x2,y2],[...]]. Wire coordinates are in the same frame as sch_get_pin_position. EasyEDA stores net names upper-case.',
 		withDocumentParam({
 			line: z
 				.union([
 					z.array(z.number()).min(4).describe('Flat array of coordinates [x1,y1,x2,y2,...]'),
 					z
-						.array(z.array(z.number()).length(2))
-						.min(2)
-						.describe('Array of point pairs [[x1,y1],[x2,y2],...]'),
+						.array(z.array(z.number()).min(2))
+						.min(1)
+						.describe('Point pairs [[x1,y1],[x2,y2],...] or flat polylines [[x1,y1,x2,y2,...],...]'),
 				])
 				.describe('Wire path coordinates'),
-			net: z.string().optional().describe('Net name to assign to the wire'),
+			net: z.string().optional().describe('Net name to assign to the wire (works with either line format)'),
 			color: z.string().nullable().optional().describe('Wire color (null for default)'),
 			lineWidth: z.number().nullable().optional().describe('Wire width (null for default)'),
 			lineType: z
@@ -171,7 +281,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.describe('Line type: 0=Solid, 1=Dashed, 2=Dotted, 3=DotDashed'),
 		}),
 		async ({ lineType, instance_id, document, ...rest }) => {
-			const params: Record<string, any> = { ...rest, instance_id, document };
+			const params: Record<string, any> = { ...rest, instance_id, document, _timeoutMs: SCH_WRITE_TIMEOUT_MS };
 			if (lineType !== undefined) {
 				params.lineType = Number(lineType);
 			}
@@ -189,21 +299,21 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 				.describe('Single primitive ID or array of primitive IDs to delete'),
 		}),
 		async (params) => {
-			const result = await bridge.send('sch.wire.delete', params);
+			const result = await bridge.send('sch.wire.delete', { ...params, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
 
 	server.tool(
 		'sch_modify_wire',
-		'Modify properties of an existing wire',
+		'Modify an existing wire. Only the fields you pass change — omitting `net` keeps the wire\'s current net name (it is no longer reset to empty). `line` accepts the same formats as sch_create_wire.',
 		withDocumentParam({
 			primitiveId: z.string().describe('The wire primitive ID'),
 			line: z
 				.union([z.array(z.number()), z.array(z.array(z.number()))])
 				.optional()
 				.describe('New wire path coordinates'),
-			net: z.string().optional().describe('New net name'),
+			net: z.string().optional().describe('New net name (omit to keep the current one; setting it renames the net on this wire)'),
 			color: z.string().nullable().optional().describe('New wire color (null for default)'),
 			lineWidth: z.number().nullable().optional().describe('New wire width (null for default)'),
 			lineType: z
@@ -216,7 +326,7 @@ export function registerSchWriteTools(server: McpServer, bridge: WebSocketBridge
 			if (lineType !== undefined) {
 				property.lineType = Number(lineType);
 			}
-			const result = await bridge.send('sch.wire.modify', { primitiveId, property, instance_id, document });
+			const result = await bridge.send('sch.wire.modify', { primitiveId, property, instance_id, document, _timeoutMs: SCH_WRITE_TIMEOUT_MS });
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);

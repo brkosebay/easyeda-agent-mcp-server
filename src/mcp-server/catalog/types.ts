@@ -28,6 +28,4 @@ export interface ToolDefinition {
 export interface ToolSearchResult {
 	name: string;
 	brief: string;
-	tags: string[];
-	score: number;
 }

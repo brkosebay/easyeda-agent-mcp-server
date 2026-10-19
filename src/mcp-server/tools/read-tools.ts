@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WebSocketBridge } from '../bridge';
 import { withDocumentParam, withQueryParams } from './query-params';
+import { extractDrcOffenders, type DrcPadRef } from '../../shared/drc-offenders';
 
 const GET_ALL_HANDLER_MAP: Record<string, string> = {
 	component: 'pcb.getAll.component',
@@ -30,11 +31,12 @@ const GET_BY_ID_HANDLER_MAP: Record<string, string> = {
 const PRIMITIVE_TYPES = [
 	'component', 'track', 'polyline', 'via', 'pad', 'pour', 'fill', 'arc', 'region',
 ] as const;
+	const DEFAULT_PAD_LOOKUP_TIMEOUT_MS = 5_000;
 
 export function registerReadTools(server: McpServer, bridge: WebSocketBridge): void {
 	server.tool(
 		'pcb_get_all_primitives',
-		'List PCB primitives by type with optional net/layer filters. Compact by default — pass compact:false for full geometry. See pcb_help("primitives") for field reference.',
+		'List PCB primitives by type with optional net/layer filters. Returns a { total, returned, truncated, items } envelope (default limit 100 — raise limit for more). Compact by default — pass compact:false for full geometry. See pcb_help("primitives") for field reference.',
 		withQueryParams({
 			type: z.enum(PRIMITIVE_TYPES).describe('Primitive type'),
 			net: z.string().optional().describe('Filter by net'),
@@ -72,10 +74,10 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 
 	server.tool(
 		'pcb_get_net_primitives',
-		'Get primitives belonging to a net (compact by default).',
+		'Get primitives belonging to a net (compact by default). Type names are matched case-insensitively and aliased onto the runtime names (line/trace/wire → Track, copperArea → Pour, footprint → Component); an unrecognized type returns an error listing the accepted values. Pads are not stored on the net, so requesting "pad" triggers a component-pin scan instead.',
 		withQueryParams({
 			net: z.string().describe('Net name'),
-			types: z.array(z.string()).optional().describe('Primitive types filter (e.g. ["Line","Via","Pad"])'),
+			types: z.array(z.string()).optional().describe('Primitive types filter, case-insensitive: Track (aka line/trace/wire), Via, Arc, Polyline, Pour, Poured, Fill, Region, Pad, Hole, Component, Text. Omit for all copper primitives on the net.'),
 		}),
 		async ({ compact, ...rest }) => {
 			const result = await bridge.send('pcb.net.getPrimitives', { ...rest, compact: compact ?? true });
@@ -119,9 +121,14 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 		withDocumentParam({
 			reference: z.string().describe('Designator (e.g. "R1", "U2")'),
 			padNumber: z.union([z.string(), z.number()]).describe('Pad number/name'),
+			timeoutMs: z.number().int().positive().default(DEFAULT_PAD_LOOKUP_TIMEOUT_MS).describe('Maximum wait in milliseconds if pad lookup is slow.'),
 		}),
 		async (params) => {
-			const result = await bridge.send('pcb.pad.findByRef', params);
+			const payload: Record<string, unknown> = { ...params };
+			const timeoutMs = Number((params as any).timeoutMs);
+			if (Number.isFinite(timeoutMs) && timeoutMs > 0) payload._timeoutMs = timeoutMs;
+			if ('timeoutMs' in payload) delete payload.timeoutMs;
+			const result = await bridge.send('pcb.pad.findByRef', payload);
 			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 		},
 	);
@@ -140,15 +147,15 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 
 	server.tool(
 		'pcb_run_drc',
-		'Run Design Rule Check. Returns pass/fail or violation array (verbose:true).',
+		'Run Design Rule Check. Returns pass/fail; verbose:true returns the violation tree (often 50–700 KB — prefer pcb_drc_summarize or pcb_drc_violations_detailed). Each verbose leaf carries primitiveIds (the offending tracks/vias/pads to move, delete or reroute) and pads ({component, pad}); globalIndex ("err397") names the violation, not copper.',
 		withQueryParams({
 			strict: z.boolean().default(true).describe('Strict mode'),
 			ui: z.boolean().default(false).describe('Show DRC panel'),
-			verbose: z.boolean().default(true).describe('Return full violation list'),
+			verbose: z.boolean().default(false).describe('Return full violation tree'),
 		}),
 		async (params) => {
 			const result = await bridge.send('pcb.drc.check', params);
-			return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+			return { content: [{ type: 'text', text: JSON.stringify(annotateDrcTree(result)) }] };
 		},
 	);
 
@@ -164,7 +171,7 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 
 	server.tool(
 		'pcb_help',
-		'Inline reference for tool conventions. Topics: "polygon" (pour/fill/region shapes), "layer" (layer ID/name table), "viaType" (numeric/string mapping), "compact" (response sizing), "units" (mil vs mm), "primitives" (field reference per type), "timeout" (overriding the 45s default).',
+		'Inline reference for tool conventions. Topics: "polygon" (pour/fill/region shapes), "layer" (layer ID/name table), "viaType" (numeric/string mapping), "compact" (response sizing), "units" (mil vs mm), "primitives" (field reference per type), "timeout" (overriding the per-tool default).',
 		{ topic: z.enum(['polygon', 'layer', 'viaType', 'compact', 'units', 'primitives', 'timeout']) },
 		async ({ topic }) => {
 			return { content: [{ type: 'text', text: HELP[topic] }] };
@@ -172,12 +179,41 @@ export function registerReadTools(server: McpServer, bridge: WebSocketBridge): v
 	);
 }
 
+// --- pcb_run_drc offender annotation ---------------------------------------
+// Same parser the extension uses for pcb_drc_summarize (src/shared/drc-offenders.ts).
+export function drcLeafOffenders(v: any): { primitiveIds: string[]; pads: DrcPadRef[] } {
+	const { primitiveIds, pads } = extractDrcOffenders(v);
+	return { primitiveIds, pads };
+}
+
+// Adds primitiveIds/pads to every leaf of the verbose DRC tree (keeping its
+// shape), drops `objs` once primitiveIds supersede it, and drops the
+// per-node `sourceUnits` sentence (`units:"mil"` stays). pass/fail booleans
+// pass through untouched.
+export function annotateDrcTree(result: unknown): unknown {
+	const walk = (node: any): any => {
+		if (Array.isArray(node)) return node.map(walk);
+		if (!node || typeof node !== 'object') return node;
+		const out: Record<string, any> = {};
+		for (const [key, value] of Object.entries(node)) {
+			if (key !== 'sourceUnits') out[key] = walk(value);
+		}
+		if (node.errorType && !Array.isArray(node.list)) {
+			const { primitiveIds, pads } = drcLeafOffenders(node);
+			if (primitiveIds.length > 0) { out.primitiveIds = primitiveIds; delete out.objs; }
+			if (pads.length > 0) out.pads = pads;
+		}
+		return out;
+	};
+	return result && typeof result === 'object' ? walk(result) : result;
+}
+
 const HELP: Record<string, string> = {
 	polygon: `Polygon input accepts four shapes:
 1. {points: [{x,y},{x,y},...]} — friendly, auto-closes the ring
 2. [{x,y},{x,y},...] — same as above without the wrapper
-3. ["L", x1,y1, x2,y2, ..., x1,y1] — native L-mode source array (closed)
-4. ["R", cx, cy, w, h, rotation, cornerRadius] — native rectangle mode
+3. ["L", x1,y1, x2,y2, ...] — friendly line ring; auto-closes and converts to EasyEDA's native line source
+4. ["R", centerX, centerY, w, h, rotation, cornerRadius] — friendly rectangle mode; converted to EasyEDA's top-left rectangle source
 All coordinates in mil. Pour/fill/region need a copper layer.`,
 	layer: `Layer accepts either a numeric ID or a name string.
 IDs: 1=Top, 2=Bottom, 3=TopSilk, 4=BottomSilk, 5=TopMask, 6=BottomMask,
@@ -193,9 +229,13 @@ Names: "TopLayer", "BottomLayer", "Inner1", "BoardOutline", etc. Case-insensitiv
 Pass compact:false to get full data (e.g. complete pour polygon source).
 Pass fields:["a","b"] for explicit field projection.
 Pass filter:{net:"GND"} or filter:{designator:"R*"} for AND-filtering.
-Pass limit:N to truncate.`,
+Pass limit:N to truncate.
+Filtering happens BEFORE limiting. getAll envelopes report {total, matched, returned, truncated}:
+total = everything the query matched, matched = survivors of filter,
+returned = items after limit, truncated = true only when items were really cut off.`,
 	units: `All PCB coordinates and lengths are in mil (1 mil = 0.0254 mm) — EasyEDA's internal data unit.
 Use pcb_create_via_mm to create vias with mm-based diameters.
+pcb_get_component_pins and pcb_run_drc normalize EasyEDA coordinate output to mil and include units metadata where useful.
 Schematic coordinates are in 0.01 inch.`,
 	primitives: `Common fields per primitive type (compact mode):
 component: primitiveId, designator, name, layer, x, y, rotation, primitiveLock
@@ -203,11 +243,14 @@ track (Line): primitiveId, net, layer, startX, startY, endX, endY, lineWidth
 polyline: primitiveId, net, layer, lineWidth (also stores point list — verbose only)
 via: primitiveId, net, x, y, holeDiameter, diameter, viaType
 pad: primitiveId, net, layer, padNumber, x, y, rotation
-pour: primitiveId, net, layer, pourName, pourPriority, pourFillMethod
+pour: primitiveId, net, layer, pourName, pourPriority, pourFillMethod, summary
 fill: primitiveId, net, layer, fillMode, lineWidth
 arc: primitiveId, net, layer, startX, startY, endX, endY, arcAngle, lineWidth
-region: primitiveId, layer, ruleType, regionName`,
-	timeout: `Default bridge timeout is 45000ms. Override per-call with _timeoutMs:
+region: primitiveId, layer, ruleType, regionName, summary
+summary (pour/region geometry): {mode:"L"|"R"|"complex", bbox, pointCount, points (first 8), closed}.
+Y in summaries and in all track/pad/via coordinates uses coordinateSpace "canvas-mil-negY"
+(mil, Y growing upward). Pour/region source arrays store Y positive-down and are normalized for you.`,
+	timeout: `Default timeout behavior is set by each tool (typically 5000ms for quick read/viewport tools). Override per-call with _timeoutMs:
 _timeoutMs: 300000  // 5 min, for long exports / autoroute / DRC on big boards
 Set EDA_WS_TIMEOUT_MS env to change the global default.`,
 };

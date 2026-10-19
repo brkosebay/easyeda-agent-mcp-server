@@ -3,8 +3,10 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = "/Users/berkaykosebay/coding_projects/easyeda-agent-mcp-server/.claude/worktrees/dynamic-toolsets";
+const ROOT = process.env.BENCH_ROOT || dirname(fileURLToPath(import.meta.url));
 const PORT_BASE = 15172;
 
 function newClient(name, env) {

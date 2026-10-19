@@ -1,10 +1,109 @@
+import { getSnapshot } from './board-context';
+import { analyzeConnectivity, fetchArcs } from './net-connectivity';
+import { componentPinScale, componentPinSourceUnits } from './pin-units';
+// `getAllPrimitivesByNet` matches on the RUNTIME primitive-type names, which
+// differ from the names the type definitions (and most agents) use: line
+// primitives report as "Track", filled copper as "Poured". Passing "Line" or
+// "line" silently returns nothing. Map every plausible spelling onto the
+// runtime name, case-insensitively.
+const NET_PRIMITIVE_TYPE_ALIASES: Record<string, string> = {
+	line: 'Track', track: 'Track', trace: 'Track', wire: 'Track', segment: 'Track',
+	via: 'Via',
+	arc: 'Arc',
+	polyline: 'Polyline', poly: 'Polyline',
+	pour: 'Pour', copperarea: 'Pour', 'copper area': 'Pour',
+	poured: 'Poured', pourfill: 'Poured',
+	fill: 'Fill', solidregion: 'Fill',
+	region: 'Region',
+	pad: 'Pad',
+	hole: 'Hole',
+	component: 'Component', footprint: 'Component',
+	text: 'Text',
+};
+
+const NET_PRIMITIVE_TYPE_VALUES = Array.from(new Set(Object.values(NET_PRIMITIVE_TYPE_ALIASES))).sort();
+
+function normalizeNetPrimitiveTypes(types: unknown): string[] | undefined {
+	if (types == null) return undefined;
+	const list = Array.isArray(types) ? types : [types];
+	if (list.length === 0) return undefined;
+	const out: string[] = [];
+	for (const raw of list) {
+		const key = String(raw ?? '').trim().toLowerCase();
+		const mapped = NET_PRIMITIVE_TYPE_ALIASES[key] ?? NET_PRIMITIVE_TYPE_ALIASES[key.replace(/[\s_-]+/g, '')];
+		if (!mapped) {
+			throw new Error(
+				`Unknown primitive type "${raw}" for pcb.net.getPrimitives. Accepted (case-insensitive): ${NET_PRIMITIVE_TYPE_VALUES.join(', ')}. Aliases: line/trace/wire → Track, copperArea → Pour, footprint → Component.`,
+			);
+		}
+		if (!out.includes(mapped)) out.push(mapped);
+	}
+	return out;
+}
+
+// `getAllPrimitivesByNet` never returns component pads — pads live under their
+// components. Reconstruct them by scanning components → pins, same approach
+// pcb.net.connectivityStatus uses.
+async function padsOnNet(net: string): Promise<Array<Record<string, any>>> {
+	const out: Array<Record<string, any>> = [];
+	const pinScale = await componentPinScale();
+	const components = await eda.pcb_PrimitiveComponent.getAll();
+	for (const c of components || []) {
+		const ci: any = c;
+		let designator: string | undefined;
+		try { designator = ci.getState_Designator?.() ?? ci.designator; } catch { designator = ci.designator; }
+		const primId = (() => {
+			try { return ci.getState_PrimitiveId?.() ?? ci.primitiveId; } catch { return ci.primitiveId; }
+		})();
+		if (!primId) continue;
+		const pins = await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(primId);
+		for (const pin of pins || []) {
+			const pi: any = pin;
+			const read = (getter: string, field: string): any => {
+				try { if (typeof pi[getter] === 'function') return pi[getter](); } catch {/* */}
+				return pi[field];
+			};
+			const netName: string | undefined = read('getState_Net', 'net');
+			if (netName !== net) continue;
+			const x = Number(read('getState_X', 'x'));
+			const y = Number(read('getState_Y', 'y'));
+			out.push({
+				primitiveType: 'Pad',
+				primitiveId: read('getState_PrimitiveId', 'primitiveId'),
+				componentPrimitiveId: primId,
+				designator,
+				padNumber: String(read('getState_PadNumber', 'padNumber') ?? ''),
+				net: netName,
+				layer: read('getState_Layer', 'layer'),
+				// Component-pad coordinates are 10-mil units on EasyEDA 2.x, mil on 3.x.
+				x: Number.isFinite(x) ? x * pinScale : undefined,
+				y: Number.isFinite(y) ? y * pinScale : undefined,
+				units: 'mil',
+				sourceUnits: componentPinSourceUnits(pinScale),
+			});
+		}
+	}
+	return out;
+}
+
 export const netHandlers: Record<string, (params: Record<string, any>) => Promise<any>> = {
 	'pcb.net.getAllNames': async () => {
 		return eda.pcb_Net.getAllNetsName();
 	},
 
 	'pcb.net.getPrimitives': async (params) => {
-		return eda.pcb_Net.getAllPrimitivesByNet(params.net, params.types);
+		const requested = normalizeNetPrimitiveTypes(params.types);
+		if (!requested) {
+			return eda.pcb_Net.getAllPrimitivesByNet(params.net);
+		}
+		const wantsPads = requested.includes('Pad');
+		const runtimeTypes = requested.filter((t) => t !== 'Pad');
+		const primitives = runtimeTypes.length > 0
+			? ((await eda.pcb_Net.getAllPrimitivesByNet(params.net, runtimeTypes as any)) ?? [])
+			: [];
+		if (!wantsPads) return primitives;
+		const pads = await padsOnNet(String(params.net));
+		return [...primitives, ...pads];
 	},
 
 	'pcb.net.getLength': async (params) => {
@@ -32,78 +131,23 @@ export const netHandlers: Record<string, (params: Record<string, any>) => Promis
 	//      live under their components. We derive pad count from the netlist
 	//      so single_pad classification stays correct.
 	'pcb.net.connectivityStatus': async (params) => {
-		const includeNets: string[] | undefined = Array.isArray(params?.nets) ? params.nets : undefined;
-		const allNets = includeNets || (await eda.pcb_Net.getAllNetsName()) || [];
-
-		// Pre-compute pad counts per net by iterating components → pins. This
-		// gives us a true "how many endpoints does this net have" number that
-		// the primitives-by-net query can't provide.
-		const padCountByNet: Record<string, number> = {};
-		try {
-			const components = await eda.pcb_PrimitiveComponent.getAll();
-			for (const c of components || []) {
-				const ci: any = c;
-				const primId = ci.getState_PrimitiveId?.() ?? ci.primitiveId;
-				if (!primId) continue;
-				const pins = await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(primId);
-				for (const pin of pins || []) {
-					const pi: any = pin;
-					const netName: string | undefined = pi.getState_Net?.() ?? pi.net;
-					if (!netName) continue;
-					padCountByNet[netName] = (padCountByNet[netName] ?? 0) + 1;
-				}
-			}
-		} catch {/* best-effort; pad counts will be 0 if this fails */}
-
-		const typeOf = (p: any): string => {
-			const fn = p?.getState_PrimitiveType;
-			let t: string | undefined;
-			try { t = typeof fn === 'function' ? fn.call(p) : undefined; } catch {/* */}
-			return t ?? p?.pcbItemPrimitiveType ?? p?.primitiveType ?? '';
-		};
-
-		const summaries: Array<Record<string, any>> = [];
-		const buckets = { routed: 0, pour_only: 0, unrouted: 0, single_pad: 0 };
-
-		for (const net of allNets) {
-			const primitives = await eda.pcb_Net.getAllPrimitivesByNet(net);
-			let lines = 0, vias = 0, pours = 0, poured = 0, polylines = 0, otherCopper = 0;
-			for (const p of primitives || []) {
-				const t = typeOf(p);
-				if (t === 'Line' || t === 'Track' || t === 'Arc') lines += 1;
-				else if (t === 'Via') vias += 1;
-				else if (t === 'Pour') pours += 1;
-				else if (t === 'Poured') poured += 1;
-				else if (t === 'Polyline') polylines += 1;
-				else if (t) otherCopper += 1;
-			}
-
-			const length = (await eda.pcb_Net.getNetLength(net)) ?? 0;
-			const pads = padCountByNet[net] ?? 0;
-
-			let status: 'routed' | 'pour_only' | 'unrouted' | 'single_pad';
-			if (pads <= 1 && lines === 0 && vias === 0 && pours === 0 && poured === 0) {
-				status = 'single_pad';
-			} else if (lines > 0 || vias > 0) {
-				status = 'routed';
-			} else if (pours > 0 || poured > 0) {
-				status = 'pour_only';
-			} else {
-				status = 'unrouted';
-			}
-
-			buckets[status] += 1;
-			summaries.push({ net, status, pads, lines, vias, pours, poured, polylines, otherCopper, length });
-		}
-
-		// Unrouted first (action items), then pour_only, routed, single_pad.
-		const order: Record<string, number> = { unrouted: 0, pour_only: 1, routed: 2, single_pad: 3 };
-		summaries.sort((a, b) => order[a.status] - order[b.status]);
-
+		// Real connectivity from the copper graph (net-connectivity.ts). The
+		// snapshot is refreshed by default: GUI edits do not invalidate the
+		// extension's cache, and a stale "connected" is worse than a slow one.
+		const snapshot = await getSnapshot({ ...params, forceRefresh: params?.forceRefresh !== false });
+		const arcs = await fetchArcs();
+		const onlyNets: string[] | undefined = Array.isArray(params?.nets) && params.nets.length ? params.nets.map(String) : undefined;
+		const nets = analyzeConnectivity({ ...snapshot, arcs }, onlyNets);
+		const order: Record<string, number> = { incomplete: 0, unrouted: 1, pour_dependent: 2, connected: 3, single_pad: 4 };
+		nets.sort((a, b) => order[a.status] - order[b.status] || a.net.localeCompare(b.net));
+		const counts = { connected: 0, incomplete: 0, pour_dependent: 0, unrouted: 0, single_pad: 0 };
+		for (const n of nets) counts[n.status] += 1;
 		return {
-			netCount: summaries.length,
-			counts: buckets,
-			nets: summaries,
+			netCount: nets.length,
+			counts,
+			nets,
+			method: 'geometric copper graph: pads (real rotated shapes; drilled pads on every layer), tracks and arc chords (width-aware), through vias',
+			note: 'connected = every pad joined by tracks/vias. incomplete = copper exists but padGroups are not joined (floatingCopper counts stubs touching no pad). pour_dependent = pads are joined only if the pour copper links them — confirm with pcb_copper_status / DRC. Pour copper is not traced here.',
 		};
 	},
 };

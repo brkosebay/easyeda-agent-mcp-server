@@ -9,7 +9,9 @@
 		"start": "node dist/mcp-server/index.js",
 		"typecheck": "npm run typecheck:mcp && npm run typecheck:extension",
 		"typecheck:mcp": "tsc --noEmit",
-		"typecheck:extension": "tsc -p tsconfig.extension.json"
+		"typecheck:extension": "tsc -p tsconfig.extension.json",
+		"inspect": "npm run compile && npx -y @modelcontextprotocol/inspector node dist/mcp-server/index.js",
+		"inspect:noBuild": "npx -y @modelcontextprotocol/inspector node dist/mcp-server/index.js"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.27.1",
@@ -18,7 +20,7 @@
 		"zod": "^4.0.0"
 	},
 	"devDependencies": {
-		"@jlceda/pro-api-types": "^0.2.9",
+		"@jlceda/pro-api-types": "^0.2.34",
 		"@types/fs-extra": "^11.0.4",
 		"@types/node": "^22.13.4",
 		"@types/ws": "^8.5.14",

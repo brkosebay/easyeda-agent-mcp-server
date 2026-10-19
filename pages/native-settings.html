@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configure protected bridge</title>
+<style>
+  :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+  body { margin: 24px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  p { line-height: 1.5; }
+  label { display: block; margin: 18px 0 8px; font-weight: 600; }
+  input { box-sizing: border-box; width: 100%; padding: 10px; font: 12px ui-monospace, monospace; }
+  button { margin-top: 14px; padding: 9px 14px; cursor: pointer; }
+  #status { margin: 12px 0 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>Connect to the local daemon</h1>
+<p>The token file is read locally to authenticate the bridge. Enable <strong>External Interactions</strong> for this extension in Extension Manager.</p>
+<form id="settings">
+  <label for="path">Daemon token file</label>
+  <input id="path" type="text" required spellcheck="false" autocomplete="off" aria-describedby="status">
+  <button id="save" type="submit">Save and reconnect</button>
+  <p id="status" role="status" aria-live="polite"></p>
+</form>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var input = document.getElementById('path');
+  var status = document.getElementById('status');
+  var button = document.getElementById('save');
+  var bridge = window.eda && window.eda.__easyedaNativeBridgeSettings;
+  if (!bridge) {
+    status.textContent = 'Settings could not initialize. Close this window and re-enable the extension.';
+    button.disabled = true;
+    return;
+  }
+  input.value = bridge.getPath();
+  document.getElementById('settings').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    button.disabled = true;
+    status.textContent = 'Checking token file…';
+    try {
+      await bridge.savePath(input.value);
+      status.textContent = 'Saved. The bridge is reconnecting; you can close this window.';
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+});
+</script>
+</body>
+</html>
